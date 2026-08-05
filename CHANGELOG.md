@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1 - 2026-08-05
+
+- Make the standalone ClawHub skill self-sufficient by documenting the official npm package, GitHub repository, Node.js requirement, license, and installation commands.
+- Distinguish installing the skill, installing the CLI, and integrating the CLI with OpenClaw.
+- Add plan, confirmed install, doctor, and disposable smoke commands for a verifiable OpenClaw deployment.
+- Require checking an exact workspace source path before using the source-only CLI fallback.
+
 ## 0.7.0 - 2026-08-05
 
 - Rename the project, npm package, GitHub repository, and bundled skill to Taskforce Loop Engineering.

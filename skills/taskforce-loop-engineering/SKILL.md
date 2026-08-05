@@ -9,6 +9,85 @@ Use this skill only when the user explicitly invokes Loop Engineering, says `走
 
 Do not route ordinary chat, research, explanations, or simple direct tasks into a loop unless the user explicitly invokes it.
 
+## Distribution and CLI Installation
+
+A ClawHub installation may provide only this `SKILL.md`; it does **not** prove that the Loop Engineering CLI or OpenClaw integration is installed. Before running loop commands, check the deployment explicitly:
+
+```bash
+command -v loop-engineering
+loop-engineering --help
+```
+
+Official distribution:
+
+- npm package: `taskforce-loop-engineering`
+- GitHub repository: `https://github.com/ambitioncn/taskforce-loop-engineering`
+- ClawHub skill: `https://clawhub.ai/ambitioncn/skills/taskforce-loop-engineering`
+- license: Apache-2.0
+- runtime requirement: Node.js 22 or newer
+
+Install the CLI globally from npm:
+
+```bash
+node --version
+npm install -g taskforce-loop-engineering
+loop-engineering --help
+```
+
+For a temporary read-only invocation without a global install:
+
+```bash
+npx -p taskforce-loop-engineering loop-engineering --help
+```
+
+For source-based development, clone the official repository and install its dependencies:
+
+```bash
+git clone https://github.com/ambitioncn/taskforce-loop-engineering.git
+cd taskforce-loop-engineering
+npm install
+npm run check
+node bin/loop-engineering.mjs --help
+```
+
+Do not guess a workspace source path. Use `node packages/loop-engineering/bin/loop-engineering.mjs ...` only after confirming that exact path exists in the current workspace.
+
+### OpenClaw Integration
+
+Installing the npm package exposes the CLI, but it does not automatically route conversations, select a worker agent, or create queue wrappers. First generate a read-only installation plan:
+
+```bash
+loop-engineering-openclaw-install \
+  --root /path/to/openclaw/workspace \
+  --queue agent-tasks
+```
+
+Review the detected agents and planned files. Then install with an existing worker-agent id:
+
+```bash
+loop-engineering-openclaw-install \
+  --root /path/to/openclaw/workspace \
+  --queue agent-tasks \
+  --worker-agent main \
+  --confirm-install
+```
+
+The installer never creates the worker agent. After installation, verify wiring before using a real task:
+
+```bash
+loop-engineering-openclaw-doctor \
+  --root /path/to/openclaw/workspace \
+  --queue agent-tasks \
+  --worker-agent main
+
+loop-engineering-openclaw-smoke \
+  --root /path/to/openclaw/workspace \
+  --queue agent-tasks \
+  --worker-agent main
+```
+
+If the CLI or integration is missing and the user requested installation or repair, install it within the authorized host/workspace scope, then run doctor and the disposable smoke. If the user only asked what is missing, report the exact package, repository, commands, and current deployment state without mutating the system.
+
 ## Conversation Contract
 
 Interpret explicit loop language as follows:
