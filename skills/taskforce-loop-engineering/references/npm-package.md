@@ -1,12 +1,12 @@
 # npm Package
 
-Package name: `agent-loop-engineering`
-Version: `0.4.2`
+Package name: `taskforce-loop-engineering`
+Version: `0.7.0`
 
 Install from npm:
 
 ```bash
-npm install -g agent-loop-engineering
+npm install -g taskforce-loop-engineering
 ```
 
 Installed commands:
@@ -18,11 +18,15 @@ loop-engineering run --root /path/to/workspace --config configs/loops/<id>.json
 loop-engineering status --root /path/to/workspace
 loop-engineering doctor --root /path/to/workspace
 loop-engineering summarize --root /path/to/workspace --limit 20
+loop-engineering project-intake --root /path/to/workspace --name <project> --brief "Project brief"
+loop-engineering project-plan --root /path/to/workspace --project <project>
+loop-engineering project-status --root /path/to/workspace --project <project>
 loop-engineering enqueue --root /path/to/workspace --queue <queue> --title "Title" --task "Task body"
 loop-engineering queue-init --root /path/to/workspace --queue <queue>
 loop-engineering code-queue-init --root /path/to/workspace --queue <queue>
 loop-engineering run-queue --root /path/to/workspace --config configs/loops/queues/<queue>.json
 loop-engineering queue-status --root /path/to/workspace --queue <queue>
+loop-engineering queue-scheduler-tick --root /path/to/workspace --config configs/loops/queues/<queue>.json
 loop-engineering queue-peek --root /path/to/workspace --queue <queue>
 loop-engineering queue-cancel --root /path/to/workspace --queue <queue> --task-id <id>
 loop-engineering queue-requeue --root /path/to/workspace --queue <queue> --task-id <id>
@@ -55,6 +59,20 @@ LOOP_WORKDIR=/path/to/workspace run-loop-cron.sh configs/loops/<id>.json
 an isolated git worktree and branch, then runs configured verification commands
 and records diff/status summaries. It does not push, merge, or delete
 worktrees.
+
+`queue-scheduler-tick` is the adaptive queue cadence command. It treats 10
+minutes as the bootstrap interval, writes live cadence state to
+`runtime/loops/<queue>/scheduler/state.json`, speeds up after successful work
+when tasks remain queued, and backs off for empty queues, failures, human gates,
+or long runs.
+
+`project-intake` is the high-level entry for fuzzy project briefs. It writes a
+deterministic project spec draft, human-readable plan, action policy, checks,
+and initial backlog under `runtime/loops/projects/<project>/` without enqueuing
+or executing work. `project-plan` solidifies that draft into
+`configs/loops/projects/<project>.json`, generates the queue config, and writes
+the initial backlog artifact. `project-status` aggregates the project queues
+without changing queue state.
 
 `code-worktree-list`, `code-worktree-inspect`, `code-worktree-diff`,
 `code-worktree-export`, `code-patch-verify`, `code-patch-apply-plan`,
@@ -96,4 +114,4 @@ default exported patch, passing patch verification, and an existing review
 bundle.
 
 The package contains `bin/`, `lib/`, `scripts/`, `templates/`, and
-`skills/loop-engineering/`.
+`skills/taskforce-loop-engineering/`.

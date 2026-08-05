@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+const root = await mkdtemp(path.join(tmpdir(), 'loop-openclaw-install-'));
+const deliveryCapture = path.join(root, 'delivery.json');
+const mockOpenClaw = path.join(root, 'mock-openclaw.mjs');
+await writeFile(mockOpenClaw, `#!/usr/bin/env node
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const args = process.argv.slice(2);
+if (args[0] === '--version') console.log('OpenClaw mock 1.0');
+else if (args[0] === 'agents' && args[1] === 'list') console.log(JSON.stringify([{ id: 'builder' }]));
+else {
+  if (args[0] === 'agent' && process.env.LOOP_CHECKPOINTS_DIR) {
+    const dir = path.resolve(process.cwd(), process.env.LOOP_CHECKPOINTS_DIR);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'cp1.json'), JSON.stringify({ version: 1, task_id: process.env.LOOP_TASK_ID, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Read-only smoke completed.', files_changed: [], verification: [{ command: 'mock smoke', outcome: 'passed' }], blockers: [], risks: [], next_action: 'acceptance_review' }));
+  }
+  if (process.env.DELIVERY_CAPTURE) await writeFile(process.env.DELIVERY_CAPTURE, JSON.stringify(args));
+  console.log(JSON.stringify({ ok: true, dryRun: args.includes('--dry-run') }));
+}
+`);
+await chmod(mockOpenClaw, 0o755);
+const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
+function run(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [installer, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+const plan = await run(['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--json']);
+const planReport = JSON.parse(plan.stdout);
+if (plan.code !== 0 || planReport.status !== 'plan_only' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent) throw new Error(`plan failed: ${plan.stderr}`);
+const missingWorker = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'missing', '--openclaw-bin', mockOpenClaw, '--json']);
+if (missingWorker.code === 0 || !missingWorker.stderr.includes('does not exist')) throw new Error('installer accepted a missing worker agent');
+const install = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--confirm-install', '--json']);
+if (install.code !== 0 || JSON.parse(install.stdout).status !== 'installed') throw new Error(`install failed: ${install.stderr}`);
+const queue = JSON.parse(await readFile(path.join(root, 'configs/loops/queues/test-tasks.json'), 'utf8'));
+if (queue.dispatcher !== 'node scripts/loops/openclaw-loop-dispatch.mjs') throw new Error('dispatcher was not installed');
+const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
+if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE')) throw new Error('worker, recursion guard, or amendment polling missing');
+const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
+if (!instructions.includes('走 loop') || !instructions.includes('immediately execute')) throw new Error('conversation instructions missing');
+const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
+if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('只入队')) throw new Error('supersede/amend routing, live progress, async notification, or queue-only routing missing');
+const notifier = await readFile(path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'utf8');
+if (!notifier.includes("'message', 'send'") || !notifier.includes('source.channel') || !notifier.includes('source.target')) throw new Error('channel-neutral notifier missing');
+const delivery = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'async result'], {
+    cwd: root,
+    env: { ...process.env, DELIVERY_CAPTURE: deliveryCapture, LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'slack', target: 'channel:C123', account: 'work', reply_to: 'M456' }) },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('close', (code) => resolve({ code, stderr }));
+});
+if (delivery.code !== 0) throw new Error(`notifier delivery failed: ${delivery.stderr}`);
+const deliveredArgs = JSON.parse(await readFile(deliveryCapture, 'utf8'));
+for (const expected of ['message', 'send', '--channel', 'slack', '--target', 'channel:C123', '--account', 'work', '--reply-to', 'M456', 'async result']) {
+  if (!deliveredArgs.includes(expected)) throw new Error(`notifier did not forward ${expected}`);
+}
+const doctor = new URL('./openclaw-doctor.mjs', import.meta.url).pathname;
+const doctorResult = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [doctor, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('close', (code) => resolve({ code, stdout, stderr }));
+});
+if (doctorResult.code !== 0) throw new Error(`doctor failed: ${doctorResult.stderr}`);
+const doctorReport = JSON.parse(doctorResult.stdout);
+if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok)) throw new Error('doctor did not complete a safe notification dry-run');
+const smoke = new URL('./openclaw-smoke.mjs', import.meta.url).pathname;
+const loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+const smokeResult = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('close', (code) => resolve({ code, stdout, stderr }));
+});
+if (smokeResult.code !== 0) throw new Error(`smoke failed: ${smokeResult.stderr}`);
+const smokeReport = JSON.parse(smokeResult.stdout);
+if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
+try { await readFile(path.join(root, `configs/loops/queues/${smokeReport.smokeQueue}.json`)); throw new Error('smoke config was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+try { await readFile(path.join(root, `runtime/loops/${smokeReport.smokeQueue}/state.json`)); throw new Error('smoke runtime was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs']) {
+  const syntax = await run(['--help']);
+  if (syntax.code !== 0) throw new Error(`installer help failed while checking ${generated}`);
+  const check = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--check', path.join(root, generated)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({ code, stderr }));
+  });
+  if (check.code !== 0) throw new Error(`generated script syntax failed: ${generated}: ${check.stderr}`);
+}
+const conflict = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--confirm-install', '--json']);
+if (conflict.code === 0) throw new Error('installer overwrote existing files without --force');
+const manager = new URL('./openclaw-manage.mjs', import.meta.url).pathname;
+async function manage(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [manager, '--root', root, ...args, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+await writeFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), `${wrapper}\n// local edit\n`);
+const modifiedPlan = await manage(['--action', 'uninstall-plan']);
+if (modifiedPlan.code !== 0 || JSON.parse(modifiedPlan.stdout).status !== 'review_required') throw new Error('modified managed file was not detected');
+const refusedUninstall = await manage(['--action', 'uninstall', '--confirm-uninstall']);
+if (refusedUninstall.code === 0) throw new Error('uninstall removed modified managed content');
+await writeFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), wrapper);
+const upgradePlan = await manage(['--action', 'upgrade-plan']);
+if (upgradePlan.code !== 0 || JSON.parse(upgradePlan.stdout).status !== 'ready') throw new Error(`upgrade plan failed: ${upgradePlan.stderr}`);
+const upgrade = await manage(['--action', 'upgrade', '--confirm-upgrade']);
+if (upgrade.code !== 0 || JSON.parse(upgrade.stdout).status !== 'upgraded') throw new Error(`upgrade failed: ${upgrade.stderr}`);
+const uninstallPlan = await manage(['--action', 'uninstall-plan']);
+if (uninstallPlan.code !== 0 || JSON.parse(uninstallPlan.stdout).status !== 'ready') throw new Error(`uninstall plan failed: ${uninstallPlan.stderr}`);
+const uninstall = await manage(['--action', 'uninstall', '--confirm-uninstall']);
+if (uninstall.code !== 0 || JSON.parse(uninstall.stdout).status !== 'uninstalled') throw new Error(`uninstall failed: ${uninstall.stderr}`);
+if (!await readFile(path.join(root, 'runtime/loops/test-tasks/state.json'), 'utf8').catch(() => 'retained')) throw new Error('unexpected runtime cleanup result');
+if (await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8').then(() => true).catch(() => false)) throw new Error('managed wrapper survived uninstall');
+console.log('openclaw installer self-test passed');

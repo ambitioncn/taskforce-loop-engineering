@@ -6,6 +6,26 @@
   "timeoutMs": 1800000,
   "leaseMs": 1860000,
   "staleActiveMs": 3600000,
+  "scheduler": {
+    "initialInterval": "10m",
+    "minInterval": "1m",
+    "maxInterval": "4h",
+    "speedupFactor": 0.5,
+    "backoffFactor": 2,
+    "idleBackoffFactor": 2,
+    "humanGateBackoffFactor": 3,
+    "longRunHeadroomFactor": 1.25,
+    "jitter": "30s",
+    "progressReport": {
+      "enabled": true,
+      "minInterval": "30m",
+      "idleInterval": "4h",
+      "notifyOnFailure": true,
+      "notifyOnHumanGate": true,
+      "notifyOnCompletion": true,
+      "notifyOnStatusChange": true
+    }
+  },
   "retry": {
     "maxAttempts": 1,
     "retryDelayMs": 0,

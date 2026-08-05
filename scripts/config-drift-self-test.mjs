@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { loopRepairPlan, runCheck, validateSpec } from '../lib/core.mjs';
+
+const root = await mkdtemp(path.join(tmpdir(), 'loop-config-drift-'));
+await writeFile(path.join(root, 'config.json'), `${JSON.stringify({ model: 'new-model' })}\n`);
+const check = { id: 'default-model', type: 'json-value', file: 'config.json', pointer: '/model', expected: 'old-model' };
+validateSpec({ id: 'config-drift-smoke', goal: 'Detect explainable configuration drift.', level: 'L1', mode: 'report-only', checks: [check] });
+const result = await runCheck(root, check);
+assert.equal(result.ok, false);
+assert.equal(result.expected, 'old-model');
+assert.equal(result.actual, 'new-model');
+assert.equal(result.drift.kind, 'configuration_value_mismatch');
+const plan = loopRepairPlan({ loopId: 'config-drift-smoke', outcome: 'failure', runPath: 'example.json', checks: [result] });
+assert.equal(plan.status, 'review_required');
+assert.equal(plan.readOnly, true);
+assert.equal(plan.autoApply, false);
+assert.equal(plan.findings[0].actual, 'new-model');
+console.log('config drift self-test passed');
