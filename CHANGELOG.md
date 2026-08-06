@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2 - 2026-08-06
+
+- Keep `ready_for_human_review` tasks out of `done/` until an explicit human decision is recorded; emit a scoped acceptance notification, fail closed when delivery routing is missing, and transition approved tasks to `completed` only after approval.
+- Forward configured human-gate policy into generated task contracts so queue state and final judgement agree.
+- Add regression coverage for the complete `ready_for_human_review → approve → completed` lifecycle.
+
 ## 0.7.1 - 2026-08-05
 
 - Make the standalone ClawHub skill self-sufficient by documenting the official npm package, GitHub repository, Node.js requirement, license, and installation commands.

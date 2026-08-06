@@ -10,6 +10,8 @@ import {
   normalizeGoalDecision,
   notifyHumanInputRequests,
   notifyTerminalTasks,
+  queueHumanDecision,
+  queueStatus,
   queueSubdirFor,
   readJson,
   routeLoopMessage,
@@ -75,6 +77,55 @@ assert.ok((await readdir(progressLedger)).length >= 5);
 const contract = await readJson(path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'task_contract.json'));
 assert.equal(contract.risk_level, 'model_assessed');
 assert.equal(contract.requires_human_gate, false);
+
+const reviewQueue = 'human-review-smoke';
+const reviewTask = await routeLoopMessage(root, {
+  route: true,
+  confirmExecute: true,
+  queue: reviewQueue,
+  message: '走 loop 生成需要人工验收的交付物',
+  sourceChannel: 'feishu',
+  sourceTarget: 'user-1'
+});
+let reviewCheckpointWrite = null;
+const reviewRun = await runQueueOnce(root, {
+  queue: reviewQueue,
+  dispatcher: '/bin/sleep 0.1',
+  requiresHumanGate: true,
+  timeoutMs: 10_000,
+  leaseMs: 20_000,
+  staleActiveMs: 60_000,
+  onProgress: (event) => {
+    if (event.phase !== 'dispatch' || event.status !== 'running' || reviewCheckpointWrite) return;
+    reviewCheckpointWrite = writeJson(path.join(taskRuntimeDirFor(root, reviewQueue, reviewTask.task.id), 'checkpoints', 'cp-review.json'), {
+      version: 1,
+      task_id: reviewTask.task.id,
+      checkpoint_id: 'cp-review',
+      status: 'ready_for_acceptance',
+      summary: 'The deliverable is complete and explicitly awaits human acceptance.',
+      files_changed: [],
+      verification: [{ command: '/bin/true', outcome: 'passed' }],
+      blockers: [],
+      risks: [],
+      next_action: 'human_acceptance'
+    });
+  }
+});
+await reviewCheckpointWrite;
+assert.equal(reviewRun.status, 'ready_for_human_review');
+assert.match(reviewRun.taskPath, /failed/);
+const reviewStatus = await queueStatus(root, reviewQueue);
+assert.equal(reviewStatus.done, 0);
+assert.equal(reviewStatus.failed, 1);
+const reviewNotice = await notifyTerminalTasks(root, { queue: reviewQueue, dryRun: true });
+assert.equal(reviewNotice.results[0].outcome, 'dry_run');
+assert.match(reviewNotice.results[0].message, /ready for human acceptance/);
+assert.match(reviewNotice.results[0].message, /approve, request_changes, or reject/);
+const reviewDecision = await queueHumanDecision(root, reviewQueue, reviewTask.task.id, { decision: 'approve' });
+assert.equal(reviewDecision.transitionedTask.status, 'completed');
+const approvedStatus = await queueStatus(root, reviewQueue);
+assert.equal(approvedStatus.done, 1);
+assert.equal(approvedStatus.failed, 0);
 
 for (const suffix of ['second', 'third']) {
   await routeLoopMessage(root, {
