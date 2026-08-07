@@ -6,6 +6,13 @@ import path from 'node:path';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 async function exists(file) { try { await access(file); return true; } catch { return false; } }
+function run(command, args, cwd) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
 function parseArgs(argv) {
   const out = { root: process.cwd(), action: 'uninstall-plan', json: false, confirm: false };
   for (let i = 0; i < argv.length; i++) {
@@ -36,15 +43,29 @@ async function main() {
     const current = present ? await readFile(file, 'utf8') : '';
     files.push({ path: entry.path, present, clean: present && sha256(current) === entry.sha256 });
   }
+  const units = [];
+  for (const entry of manifest.managedUnits || []) {
+    const present = await exists(entry.path);
+    const current = present ? await readFile(entry.path, 'utf8') : '';
+    units.push({ ...entry, present, clean: present && sha256(current) === entry.sha256 });
+  }
   const agentsFile = path.join(args.root, manifest.managedInstructions?.path || 'AGENTS.md');
   const agentsText = await exists(agentsFile) ? await readFile(agentsFile, 'utf8') : '';
   const block = manifest.managedInstructions?.content || '';
   const instructionsClean = Boolean(block) && sha256(block) === manifest.managedInstructions?.sha256 && agentsText.includes(block);
-  const modified = files.filter((item) => item.present && !item.clean).map((item) => item.path);
-  const plan = { version: 1, action: args.action, readOnly: args.action.endsWith('-plan'), queue: manifest.queue, workerAgent: manifest.workerAgent, files, instructionsClean, modified, retained: manifest.retainedOnUninstall || [], ready: modified.length === 0 && instructionsClean };
+  const modified = [...files.filter((item) => item.present && !item.clean).map((item) => item.path), ...units.filter((item) => item.present && !item.clean).map((item) => item.path)];
+  const plan = { version: 2, action: args.action, readOnly: args.action.endsWith('-plan'), queue: manifest.queue, workerAgent: manifest.workerAgent, files, units, instructionsClean, modified, retained: manifest.retainedOnUninstall || [], ready: modified.length === 0 && instructionsClean };
   if (args.action === 'uninstall') {
     if (!plan.ready) throw new Error(`Refusing uninstall because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
+    const timer = units.find((item) => item.unit?.endsWith('.timer'));
+    if (timer) {
+      const stopped = await run(manifest.systemctlBin || 'systemctl', ['--user', 'disable', '--now', timer.unit], args.root);
+      if (stopped.code !== 0) throw new Error(`Cannot disable Loop scheduler timer ${timer.unit}: ${stopped.stderr || stopped.stdout}`);
+    }
     for (const item of files) if (item.present && item.clean) await rm(path.join(args.root, item.path), { force: true });
+    for (const item of units) if (item.present && item.clean) await rm(item.path, { force: true });
+    const reload = await run(manifest.systemctlBin || 'systemctl', ['--user', 'daemon-reload'], args.root);
+    if (reload.code !== 0) throw new Error(`Cannot reload user systemd units: ${reload.stderr || reload.stdout}`);
     await writeFile(agentsFile, agentsText.replace(block, ''));
     await rm(manifestFile, { force: true });
     plan.status = 'uninstalled'; plan.readOnly = false;
@@ -52,7 +73,7 @@ async function main() {
     if (!plan.ready) throw new Error(`Refusing upgrade because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
     const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--openclaw-bin', manifest.openclawBin || 'openclaw', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
       child.on('close', (code) => resolve({ code, stdout, stderr }));
     });

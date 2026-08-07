@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1 - 2026-08-07
+
+- Make the standard OpenClaw installer and upgrade path install and enable a managed per-queue systemd user scheduler, configure required scheduler heartbeats by default, and use an absolute packaged CLI path so systemd does not depend on an interactive shell `PATH`.
+- Make uninstall disable and remove the managed scheduler units, while retaining queue runtime and refusing to overwrite locally modified managed units.
+
 ## 0.8.0 - 2026-08-07
 
 - Add project-aware completion semantics: accepted milestones return project tasks to `inbox/` as `project_in_progress` until an explicit project terminal contract is accepted.

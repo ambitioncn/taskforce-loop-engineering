@@ -49,6 +49,7 @@ Use `--confirm-install` only after resolving path conflicts. Existing queue runt
 - Worker agent names are installation settings and are not fixed to Ironman.
 - Every task uses an isolated `agent:<worker>:loop-task-<task-id>` session.
 - Asynchronous delivery requires recorded source `channel` and `target`; missing routing metadata fails closed.
+- A confirmed install or managed upgrade now creates and enables a per-queue systemd user scheduler. Queue configs require its heartbeat, so queued project work cannot silently wait forever. Uninstall disables and removes the managed units while retaining queue runtime.
 - `repair-plan` is read-only. Version 0.6 does not add an automatic configuration repair command.
 
 After installation or upgrade, validate the integration:

@@ -7,6 +7,10 @@ import path from 'node:path';
 const root = await mkdtemp(path.join(tmpdir(), 'loop-openclaw-install-'));
 const deliveryCapture = path.join(root, 'delivery.json');
 const mockOpenClaw = path.join(root, 'mock-openclaw.mjs');
+const mockSystemctl = path.join(root, 'mock-systemctl.mjs');
+const systemctlCapture = path.join(root, 'systemctl-calls.jsonl');
+process.env.XDG_CONFIG_HOME = path.join(root, 'xdg');
+process.env.SYSTEMCTL_CAPTURE = systemctlCapture;
 await writeFile(mockOpenClaw, `#!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,6 +28,11 @@ else {
 }
 `);
 await chmod(mockOpenClaw, 0o755);
+await writeFile(mockSystemctl, `#!/usr/bin/env node
+import { appendFile } from 'node:fs/promises';
+if (process.env.SYSTEMCTL_CAPTURE) await appendFile(process.env.SYSTEMCTL_CAPTURE, JSON.stringify(process.argv.slice(2)) + '\\n');
+`);
+await chmod(mockSystemctl, 0o755);
 const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
 function run(args) {
   return new Promise((resolve) => {
@@ -34,21 +43,38 @@ function run(args) {
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
 }
-const plan = await run(['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--json']);
+const installBase = ['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--systemctl-bin', mockSystemctl];
+const plan = await run([...installBase, '--json']);
 const planReport = JSON.parse(plan.stdout);
 if (plan.code !== 0 || planReport.status !== 'plan_only' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent) throw new Error(`plan failed: ${plan.stderr}`);
-const missingWorker = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'missing', '--openclaw-bin', mockOpenClaw, '--json']);
+const missingWorker = await run([...installBase, '--worker-agent', 'missing', '--json']);
 if (missingWorker.code === 0 || !missingWorker.stderr.includes('does not exist')) throw new Error('installer accepted a missing worker agent');
-const install = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--confirm-install', '--json']);
+const install = await run([...installBase, '--worker-agent', 'builder', '--confirm-install', '--json']);
 if (install.code !== 0 || JSON.parse(install.stdout).status !== 'installed') throw new Error(`install failed: ${install.stderr}`);
 const queue = JSON.parse(await readFile(path.join(root, 'configs/loops/queues/test-tasks.json'), 'utf8'));
 if (queue.dispatcher !== 'node scripts/loops/openclaw-loop-dispatch.mjs') throw new Error('dispatcher was not installed');
+if (queue.scheduler?.required !== true || queue.scheduler?.heartbeatMaxAgeMs !== 300000) throw new Error('required scheduler heartbeat was not installed');
 const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
 if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE')) throw new Error('worker, recursion guard, or amendment polling missing');
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('走 loop') || !instructions.includes('immediately execute')) throw new Error('conversation instructions missing');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
-if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('只入队')) throw new Error('supersede/amend routing, live progress, async notification, or queue-only routing missing');
+if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('只入队')) throw new Error('supersede/amend routing, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
+const serviceFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.service');
+const timerFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.timer');
+const service = await readFile(serviceFile, 'utf8');
+const timer = await readFile(timerFile, 'utf8');
+if (!service.includes('scheduler-tick') || !timer.includes('OnUnitActiveSec=1min')) throw new Error('scheduler systemd units were not installed');
+const installSystemctlCalls = await readFile(systemctlCapture, 'utf8');
+if (!installSystemctlCalls.includes('["--user","enable","--now","openclaw-loop-test-tasks-scheduler.timer"]')) throw new Error('scheduler timer was not enabled');
+const schedulerTick = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'scheduler-tick', '--force-due', '--plan-only'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = ''; child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('close', (code) => resolve({ code, stdout, stderr }));
+});
+if (schedulerTick.code !== 0) throw new Error(`installed scheduler tick failed: ${schedulerTick.stderr || schedulerTick.stdout}`);
+const schedulerState = JSON.parse(await readFile(path.join(root, 'runtime/loops/test-tasks/scheduler/state.json'), 'utf8'));
+if (!schedulerState.generatedAt || !schedulerState.nextRunAt) throw new Error('installed scheduler tick did not persist its heartbeat and cadence');
 const notifier = await readFile(path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'utf8');
 if (!notifier.includes("'message', 'send'") || !notifier.includes('source.channel') || !notifier.includes('source.target')) throw new Error('channel-neutral notifier missing');
 const delivery = await new Promise((resolve) => {
@@ -100,7 +126,7 @@ for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/lo
   });
   if (check.code !== 0) throw new Error(`generated script syntax failed: ${generated}: ${check.stderr}`);
 }
-const conflict = await run(['--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--confirm-install', '--json']);
+const conflict = await run([...installBase, '--worker-agent', 'builder', '--confirm-install', '--json']);
 if (conflict.code === 0) throw new Error('installer overwrote existing files without --force');
 const manager = new URL('./openclaw-manage.mjs', import.meta.url).pathname;
 async function manage(args) {
@@ -126,4 +152,7 @@ const uninstall = await manage(['--action', 'uninstall', '--confirm-uninstall'])
 if (uninstall.code !== 0 || JSON.parse(uninstall.stdout).status !== 'uninstalled') throw new Error(`uninstall failed: ${uninstall.stderr}`);
 if (!await readFile(path.join(root, 'runtime/loops/test-tasks/state.json'), 'utf8').catch(() => 'retained')) throw new Error('unexpected runtime cleanup result');
 if (await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8').then(() => true).catch(() => false)) throw new Error('managed wrapper survived uninstall');
+if (await readFile(serviceFile, 'utf8').then(() => true).catch(() => false) || await readFile(timerFile, 'utf8').then(() => true).catch(() => false)) throw new Error('managed scheduler units survived uninstall');
+const finalSystemctlCalls = await readFile(systemctlCapture, 'utf8');
+if (!finalSystemctlCalls.includes('["--user","disable","--now","openclaw-loop-test-tasks-scheduler.timer"]')) throw new Error('scheduler timer was not disabled during uninstall');
 console.log('openclaw installer self-test passed');

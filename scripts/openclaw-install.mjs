@@ -5,13 +5,14 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 function parseArgs(argv) {
-  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', json: false, confirmInstall: false, force: false };
+  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', json: false, confirmInstall: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--root') out.root = path.resolve(argv[++i]);
     else if (arg === '--queue') out.queue = argv[++i];
     else if (arg === '--worker-agent') out.workerAgent = argv[++i];
     else if (arg === '--openclaw-bin') out.openclawBin = argv[++i];
+    else if (arg === '--systemctl-bin') out.systemctlBin = argv[++i];
     else if (arg === '--confirm-install') out.confirmInstall = true;
     else if (arg === '--force') out.force = true;
     else if (arg === '--json') out.json = true;
@@ -19,6 +20,10 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${arg}`);
   }
   return out;
+}
+
+function systemdEscape(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function safeId(value, label) {
@@ -86,13 +91,13 @@ child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 :
 `;
 }
 
-function wrapperSource({ queue }) {
+function wrapperSource({ queue, loopBin }) {
   return `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
 const [command, ...rest] = process.argv.slice(2);
 function run(args) {
   return new Promise((resolve) => {
-    const child = spawn('loop-engineering', args, { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
+    const child = spawn(process.execPath, [${JSON.stringify(loopBin)}, ...args], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
     child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
   });
 }
@@ -121,11 +126,24 @@ if (command === 'route') {
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = runCode || humanNotifyCode || terminalNotifyCode;
+} else if (command === 'scheduler-tick') {
+  const tickCode = await run(['queue-scheduler-tick', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
+  const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
+  const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
+  process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;
 } else {
   console.error('Usage: node scripts/loops/openclaw-loop.mjs route --message "走 loop：任务" [source metadata]');
   process.exitCode = 1;
 }
 `;
+}
+
+function schedulerServiceSource({ root, queue }) {
+  return `[Unit]\nDescription=Taskforce Loop Engineering scheduler for ${queue}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory="${systemdEscape(root)}"\nExecStart="${systemdEscape(process.execPath)}" "${systemdEscape(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))}" scheduler-tick --json\n`;
+}
+
+function schedulerTimerSource({ queue }) {
+  return `[Unit]\nDescription=Wake Taskforce Loop Engineering scheduler for ${queue}\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=1min\nAccuracySec=10s\nPersistent=true\nUnit=openclaw-loop-${queue}-scheduler.service\n\n[Install]\nWantedBy=timers.target\n`;
 }
 
 function notifierSource({ openclawBin }) {
@@ -164,13 +182,17 @@ function instructionsBlock({ queue }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--openclaw-bin openclaw] [--confirm-install] [--force] [--json]');
+    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--openclaw-bin openclaw] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]');
     return;
   }
   safeId(args.queue, 'queue');
   if (args.workerAgent) safeId(args.workerAgent, 'worker agent');
   const worker = await resolveWorkerAgent(args);
   args.workerAgent = worker.workerAgent;
+  args.loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+  const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
+  const schedulerUnit = `openclaw-loop-${args.queue}-scheduler.service`;
+  const schedulerTimer = `openclaw-loop-${args.queue}-scheduler.timer`;
   const files = {
     workspaceHealth: path.join(args.root, 'configs', 'loops', 'workspace-health.json'),
     queueConfig: path.join(args.root, 'configs', 'loops', 'queues', `${args.queue}.json`),
@@ -178,11 +200,13 @@ async function main() {
     wrapper: path.join(args.root, 'scripts', 'loops', 'openclaw-loop.mjs'),
     notifier: path.join(args.root, 'scripts', 'loops', 'openclaw-loop-notify.mjs'),
     manifest: path.join(args.root, 'runtime', 'loop-engineering-openclaw-install.json'),
-    instructions: path.join(args.root, 'AGENTS.md')
+    instructions: path.join(args.root, 'AGENTS.md'),
+    schedulerService: path.join(systemdUserDir, schedulerUnit),
+    schedulerTimer: path.join(systemdUserDir, schedulerTimer)
   };
   const conflicts = [];
   for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const report = { version: 1, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  const report = { version: 1, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   report.next = args.confirmInstall ? 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.' : 'Review this plan, then rerun with --confirm-install.';
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
   if (args.confirmInstall) {
@@ -203,27 +227,41 @@ async function main() {
       dispatcher: 'node scripts/loops/openclaw-loop-dispatch.mjs',
       preflightConfig: 'configs/loops/workspace-health.json',
       timeoutMs: 1800000, leaseMs: 1860000, staleActiveMs: 3600000,
+      scheduler: { required: true, heartbeatMaxAgeMs: 300000, initialInterval: '1m', minInterval: '1m', maxInterval: '4h', speedupFactor: 0.5, backoffFactor: 2, idleBackoffFactor: 2, humanGateBackoffFactor: 3, longRunHeadroomFactor: 1.25, jitter: '10s' },
       retry: { maxAttempts: 1, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
       revisionPolicy: { enabled: true, maxRevisionRounds: 3, sameFailureThreshold: 2, requireStrategyChange: true }
     }, null, 2)}\n`;
     const dispatcherContent = dispatcherSource(args);
     const wrapperContent = wrapperSource(args);
     const notifierContent = notifierSource(args);
+    const schedulerServiceContent = schedulerServiceSource(args);
+    const schedulerTimerContent = schedulerTimerSource(args);
     await writeFile(files.queueConfig, queueContent);
     await writeFile(files.dispatcher, dispatcherContent);
     await writeFile(files.wrapper, wrapperContent);
     await writeFile(files.notifier, notifierContent);
+    await mkdir(systemdUserDir, { recursive: true });
+    await writeFile(files.schedulerService, schedulerServiceContent);
+    await writeFile(files.schedulerTimer, schedulerTimerContent);
+    const daemonReload = await run(args.systemctlBin, ['--user', 'daemon-reload'], { cwd: args.root });
+    if (daemonReload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(daemonReload.stderr || daemonReload.stdout).trim() || `exit ${daemonReload.code}`}`);
+    const enableTimer = await run(args.systemctlBin, ['--user', 'enable', '--now', schedulerTimer], { cwd: args.root });
+    if (enableTimer.code !== 0) throw new Error(`Cannot enable Loop scheduler timer ${schedulerTimer}: ${(enableTimer.stderr || enableTimer.stdout).trim() || `exit ${enableTimer.code}`}`);
     const instructions = await exists(files.instructions) ? await readFile(files.instructions, 'utf8') : '';
     const managedInstructions = instructionsBlock(args);
     if (!instructions.includes('<!-- loop-engineering:openclaw:start -->')) await appendFile(files.instructions, managedInstructions);
     await mkdir(path.dirname(files.manifest), { recursive: true });
     await writeFile(files.manifest, `${JSON.stringify({
-      version: 1, queue: args.queue, workerAgent: args.workerAgent, openclawBin: args.openclawBin, installedAt: new Date().toISOString(),
+      version: 2, queue: args.queue, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
       managedFiles: [
         { path: path.relative(args.root, files.queueConfig), sha256: sha256(queueContent) },
         { path: path.relative(args.root, files.dispatcher), sha256: sha256(dispatcherContent) },
         { path: path.relative(args.root, files.wrapper), sha256: sha256(wrapperContent) },
         { path: path.relative(args.root, files.notifier), sha256: sha256(notifierContent) }
+      ],
+      managedUnits: [
+        { path: files.schedulerService, unit: schedulerUnit, sha256: sha256(schedulerServiceContent) },
+        { path: files.schedulerTimer, unit: schedulerTimer, sha256: sha256(schedulerTimerContent) }
       ],
       managedInstructions: { path: 'AGENTS.md', sha256: sha256(managedInstructions), content: managedInstructions },
       retainedOnUninstall: [`runtime/loops/${args.queue}`]

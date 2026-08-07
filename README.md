@@ -59,6 +59,11 @@ already loop-managed to prevent recursive re-enqueue. Existing generated files
 are not overwritten unless `--force` is supplied after review. The installed
 conversation policy treats `走 loop` as enqueue plus immediate execution;
 `只入队` and `只排队` remain explicit queue-only overrides.
+The confirmed installer also creates and enables a managed per-queue systemd
+user timer. It wakes the adaptive scheduler once per minute; the persisted
+scheduler cadence still decides whether work is due. Generated queue configs
+require a fresh scheduler heartbeat, so queued work fails `doctor` with
+`scheduler_missing` instead of waiting indefinitely when the timer is absent.
 After every installed runner tick, the wrapper idempotently scans human-input
 gates and terminal tasks. The generated notifier delivers through
 `openclaw message send` using the task's recorded `channel`, `target`, `account`,
@@ -102,10 +107,12 @@ loop-engineering-openclaw-manage --root /path/to/workspace --action uninstall-pl
 loop-engineering-openclaw-manage --root /path/to/workspace --action uninstall --confirm-uninstall
 ```
 
-The installer manifest records SHA-256 hashes for generated files and the exact
-managed `AGENTS.md` block. Upgrade/uninstall refuses when managed content was
-edited. Uninstall removes only clean managed files and that exact instructions
-block; queue runtime is explicitly retained.
+The installer manifest records SHA-256 hashes for generated files, systemd
+units, and the exact managed `AGENTS.md` block. Upgrade/uninstall refuses when
+managed content was edited. Upgrade installs and enables the scheduler for
+older managed integrations. Uninstall first disables the timer, then removes
+only clean managed files, units, and that exact instructions block; queue
+runtime is explicitly retained.
 
 ## Commands
 
