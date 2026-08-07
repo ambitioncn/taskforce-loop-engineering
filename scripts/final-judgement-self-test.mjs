@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildFinalJudgement, selectEffectiveAcceptanceReviews } from '../lib/core.mjs';
+import { buildFinalJudgement, dispatchFailureClassification, selectEffectiveAcceptanceReviews } from '../lib/core.mjs';
 
 const basePlan = { rubric: [], automation: [] };
 const baseContract = { task_id: 't1', risk_level: 'L1', requires_human_gate: false, task_scope: 'scoped_task' };
@@ -14,6 +14,35 @@ const baseContract = { task_id: 't1', risk_level: 'L1', requires_human_gate: fal
     ]
   };
   assert.equal(selectEffectiveAcceptanceReviews(devPlan, reviews)[0].checkpointId, 'cp10');
+}
+
+{
+  const classification = dispatchFailureClassification({
+    exitCode: 1,
+    timedOut: false,
+    stderr: 'CLI transcript compaction failed: Compaction timed out',
+    stdout: ''
+  });
+  assert.equal(classification.category, 'compaction_timeout');
+  assert.equal(classification.recoverableRuntime, true);
+}
+
+{
+  const devPlan = { checkpoints: [{ id: 'cp1' }] };
+  const reviews = { reviews: [{ checkpointId: 'cp38', sequence: 38, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
+  const judgement = buildFinalJudgement(
+    { ...baseContract, task_scope: 'project' },
+    basePlan,
+    devPlan,
+    { count: 38 },
+    reviews,
+    {
+      dispatchStatus: 'runtime_interrupted',
+      dispatchFailureClassification: { category: 'compaction_timeout', recoverableRuntime: true }
+    }
+  );
+  assert.equal(judgement.outcome, 'runtime_interrupted');
+  assert.equal(judgement.reasons.some((reason) => reason.includes('development')), false);
 }
 
 {

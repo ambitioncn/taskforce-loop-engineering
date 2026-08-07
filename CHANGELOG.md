@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 - 2026-08-07
+
+- Classify transcript-compaction timeouts and selected transport failures as recoverable runtime interruptions instead of development revisions. Preserve accepted checkpoints, rotate the worker session, and return the same project task to the queue with bounded recovery attempts.
+- Bound long-lived project sessions by rotating the worker session after a configurable number of successful project ticks (`retry.sessionMaxTicks`, default 10).
+
 ## 0.8.1 - 2026-08-07
 
 - Make the standard OpenClaw installer and upgrade path install and enable a managed per-queue systemd user scheduler, configure required scheduler heartbeats by default, and use an absolute packaged CLI path so systemd does not depend on an interactive shell `PATH`.

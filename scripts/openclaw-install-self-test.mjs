@@ -55,7 +55,8 @@ const queue = JSON.parse(await readFile(path.join(root, 'configs/loops/queues/te
 if (queue.dispatcher !== 'node scripts/loops/openclaw-loop-dispatch.mjs') throw new Error('dispatcher was not installed');
 if (queue.scheduler?.required !== true || queue.scheduler?.heartbeatMaxAgeMs !== 300000) throw new Error('required scheduler heartbeat was not installed');
 const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
-if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE')) throw new Error('worker, recursion guard, or amendment polling missing');
+if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE') || !dispatcher.includes('LOOP_SESSION_GENERATION') || !dispatcher.includes('-g${sessionGeneration}')) throw new Error('worker, recursion guard, amendment polling, or session generation missing');
+if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 10) throw new Error('bounded runtime recovery policy was not installed');
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('走 loop') || !instructions.includes('immediately execute')) throw new Error('conversation instructions missing');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');

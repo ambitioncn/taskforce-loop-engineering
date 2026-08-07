@@ -68,6 +68,7 @@ function dispatcherSource({ workerAgent, openclawBin }) {
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 const task = JSON.parse(await readFile(process.env.LOOP_TASK_FILE, 'utf8'));
+const sessionGeneration = Number.parseInt(process.env.LOOP_SESSION_GENERATION || '0', 10) || 0;
 const prompt = [
   'You are receiving an already loop-managed task.',
   'Do not route or enqueue this task again, even if its quoted request contains a loop trigger.',
@@ -84,7 +85,7 @@ const prompt = [
 ].join('\\n');
 const child = spawn(${JSON.stringify(openclawBin)}, [
   'agent', '--agent', ${JSON.stringify(workerAgent)},
-  '--session-key', \`agent:${workerAgent}:loop-task-\${task.id}\`,
+  '--session-key', \`agent:${workerAgent}:loop-task-\${task.id}-g\${sessionGeneration}\`,
   '--message', prompt, '--json', '--timeout', '1800'
 ], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
 child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 : 1); });
@@ -228,7 +229,7 @@ async function main() {
       preflightConfig: 'configs/loops/workspace-health.json',
       timeoutMs: 1800000, leaseMs: 1860000, staleActiveMs: 3600000,
       scheduler: { required: true, heartbeatMaxAgeMs: 300000, initialInterval: '1m', minInterval: '1m', maxInterval: '4h', speedupFactor: 0.5, backoffFactor: 2, idleBackoffFactor: 2, humanGateBackoffFactor: 3, longRunHeadroomFactor: 1.25, jitter: '10s' },
-      retry: { maxAttempts: 1, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
+      retry: { maxAttempts: 1, runtimeRecoveryMaxAttempts: 2, sessionMaxTicks: 10, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
       revisionPolicy: { enabled: true, maxRevisionRounds: 3, sameFailureThreshold: 2, requireStrategyChange: true }
     }, null, 2)}\n`;
     const dispatcherContent = dispatcherSource(args);

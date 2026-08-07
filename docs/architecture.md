@@ -276,6 +276,17 @@ permission, and explicit human-approval blockers, including
 gates rather than development failures, so `queue-revision-next` does not turn a
 phone permission prompt into repeated automated attempts.
 
+Recoverable model-runtime failures use a separate path. Transcript-compaction
+timeouts, command timeouts, selected transport failures, and rate limits are
+classified as `runtime_interrupted`; they do not create a development revision
+request or invalidate accepted checkpoints. The same task returns to `inbox/`
+with an incremented session generation, so the workspace dispatcher creates a
+fresh worker session and resumes from the durable contract, amendments,
+checkpoints, and reviews. `retry.runtimeRecoveryMaxAttempts` bounds automatic
+recovery before the task becomes `runtime_blocked`. Long project sessions also
+rotate proactively after `retry.sessionMaxTicks` successful continuation ticks
+(default 10), preventing transcript growth from becoming project state.
+
 ## Code Worktree Queue
 
 `v0.3.0` adds assisted code queues:
