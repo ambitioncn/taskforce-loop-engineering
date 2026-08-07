@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rename, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -371,6 +371,8 @@ assert.match(gateDryRun.results[0].message, /Provide the SMS code/);
 const gateSent = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(gateSent.sent, 1);
 const gateId = gateSent.results[0].gateId;
+assert.equal((await readJson(path.join(queueSubdirFor(root, queue, 'waiting'), path.basename(failedFile)))).status, 'waiting_for_human');
+await assert.rejects(access(failedFile));
 const resolved = await resolveHumanInput(root, { queue, gateId, input: '123456', sourceMessageId: 'reply-1' });
 assert.equal(resolved.outcome, 'resolved_and_requeued');
 const requeuedTask = await readJson(path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile)));

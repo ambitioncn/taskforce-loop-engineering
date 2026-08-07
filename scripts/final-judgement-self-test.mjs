@@ -17,6 +17,20 @@ const baseContract = { task_id: 't1', risk_level: 'L1', requires_human_gate: fal
 }
 
 {
+  const devPlan = { checkpoints: [{ id: 'cp1' }] };
+  const reviews = {
+    reviews: [
+      // Acceptance reviews are regenerated in filename traversal order. A
+      // legacy cp9 review can consequently have a later review timestamp than
+      // the real latest cp46 checkpoint; that timestamp must not win.
+      { checkpointId: 'cp46', sequence: 9, createdAt: '2026-08-07T18:27:18.990Z', status: 'blocked' },
+      { checkpointId: 'cp9', sequence: 1, createdAt: '2026-08-07T18:27:18.992Z', status: 'accepted' }
+    ]
+  };
+  assert.equal(selectEffectiveAcceptanceReviews(devPlan, reviews)[0].checkpointId, 'cp46');
+}
+
+{
   const classification = dispatchFailureClassification({
     exitCode: 1,
     timedOut: false,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3 - 2026-08-07
+
+- Select the latest single-milestone checkpoint by durable checkpoint identity/sequence instead of regenerated acceptance-review timestamps, preventing a lexically late legacy `cp9` review from overriding a blocked `cp46+` checkpoint.
+- Limit blocked human-input notification to the final judgement's effective checkpoint set, move blocked tasks from `failed/` into `waiting/`, and make the local Ironman scheduler run human-gate and terminal notification reconciliation after each notified tick.
+
 ## 0.8.2 - 2026-08-07
 
 - Classify transcript-compaction timeouts and selected transport failures as recoverable runtime interruptions instead of development revisions. Preserve accepted checkpoints, rotate the worker session, and return the same project task to the queue with bounded recovery attempts.
