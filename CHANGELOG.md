@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 - 2026-08-07
+
+- Add project-aware completion semantics: accepted milestones return project tasks to `inbox/` as `project_in_progress` until an explicit project terminal contract is accepted.
+- Replace filename/tail-based checkpoint judgement with milestone lineage, revision ancestry, sequence, and recency so resolved historical blockers and `cp10` ordering cannot corrupt the final judgement.
+- Separate current blockers from `deferred_gates`, and preserve future authorization boundaries without blocking safe local backlog work.
+- Add a durable human-input lifecycle with a distinct `waiting/` queue state. Inputs received while queued, active, failed, or canceled are delivered on the next safe tick, consumed once, and closed by a successor checkpoint.
+- Keep one-time secrets out of task bodies and ordinary JSON artifacts. Store them in permission-restricted temporary files, pass only references and hashes, and destroy plaintext after dispatch.
+- Recover orphaned `active/` tasks immediately after a new runner acquires the queue lock. The task is atomically returned to `inbox/`, recovery metadata is retained, and the same tick resumes from durable checkpoints instead of leaving a zombie active task until the stale timeout.
+- Add required scheduler heartbeat health checks. A queue with `scheduler.required=true` and queued work now fails `doctor` with `scheduler_missing` when no fresh external scheduler tick has been observed.
+- Add regression coverage for project continuation, checkpoint lineage and ordering, human-input state transitions and redaction, orphan recovery, and scheduler heartbeat fail-closed behavior.
+
 ## 0.7.2 - 2026-08-06
 
 - Keep `ready_for_human_review` tasks out of `done/` until an explicit human decision is recorded; emit a scoped acceptance notification, fail closed when delivery routing is missing, and transition approved tasks to `completed` only after approval.

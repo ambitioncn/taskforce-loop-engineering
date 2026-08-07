@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -77,6 +77,48 @@ assert.ok((await readdir(progressLedger)).length >= 5);
 const contract = await readJson(path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'task_contract.json'));
 assert.equal(contract.risk_level, 'model_assessed');
 assert.equal(contract.requires_human_gate, false);
+
+const orphanQueue = 'orphan-recovery-smoke';
+const orphanRouted = await routeLoopMessage(root, {
+  route: true,
+  confirmExecute: true,
+  queue: orphanQueue,
+  message: '走 loop 验证异常退出自动恢复',
+  sourceChannel: 'feishu',
+  sourceTarget: 'user-1'
+});
+const orphanName = `${orphanRouted.task.id}.json`;
+const orphanInbox = path.join(queueSubdirFor(root, orphanQueue, 'inbox'), orphanName);
+const orphanActive = path.join(queueSubdirFor(root, orphanQueue, 'active'), orphanName);
+await writeJson(orphanActive, { ...(await readJson(orphanInbox)), status: 'active', startedAt: new Date().toISOString() });
+await rm(orphanInbox, { force: true });
+await writeJson(path.join(taskRuntimeDirFor(root, orphanQueue, orphanRouted.task.id), 'checkpoints', 'cp-before-crash.json'), {
+  version: 1,
+  task_id: orphanRouted.task.id,
+  checkpoint_id: 'cp-before-crash',
+  status: 'in_progress',
+  summary: 'Durable progress written before the parent runner exited.',
+  files_changed: [],
+  verification: [],
+  blockers: [],
+  risks: [],
+  next_action: 'resume_from_checkpoint'
+});
+const orphanRun = await runQueueOnce(root, {
+  queue: orphanQueue,
+  dispatcher: '/bin/true',
+  timeoutMs: 10_000,
+  leaseMs: 20_000,
+  staleActiveMs: 60_000
+});
+assert.equal(orphanRun.processed, true);
+assert.equal(orphanRun.run.orphanRecovered.length, 1);
+assert.equal(orphanRun.run.orphanRecovered[0].taskId, orphanRouted.task.id);
+assert.ok(orphanRun.progress.some((event) => event.status === 'orphan_recovered'));
+const orphanTerminal = await readJson(path.join(root, orphanRun.taskPath));
+assert.equal(orphanTerminal.orphanRecoveryCount, 1);
+assert.equal(orphanTerminal.requeuedFrom, 'active');
+assert.equal((await readJson(path.join(taskRuntimeDirFor(root, orphanQueue, orphanRouted.task.id), 'checkpoints', 'cp-before-crash.json'))).checkpoint_id, 'cp-before-crash');
 
 const reviewQueue = 'human-review-smoke';
 const reviewTask = await routeLoopMessage(root, {
@@ -332,10 +374,45 @@ const gateId = gateSent.results[0].gateId;
 const resolved = await resolveHumanInput(root, { queue, gateId, input: '123456', sourceMessageId: 'reply-1' });
 assert.equal(resolved.outcome, 'resolved_and_requeued');
 const requeuedTask = await readJson(path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile)));
-assert.equal(requeuedTask.humanInput.response, '123456');
-assert.match(requeuedTask.body, /Human input for gate/);
+assert.equal(requeuedTask.humanInput.secret_received, true);
+assert.equal(requeuedTask.body.includes('123456'), false);
+const resolvedGate = await readJson(path.join(root, resolved.ledger ?? gateSent.results[0].ledger));
+assert.equal(JSON.stringify(resolvedGate).includes('123456'), false);
+assert.equal(resolvedGate.response_sha256.length, 64);
+
+// Queued tasks receive a non-sensitive event reference without being moved.
+const queuedCheckpoint = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-queued.json');
+await writeJson(queuedCheckpoint, {
+  version: 1, task_id: routed.task.id, checkpoint_id: 'cp-queued', status: 'needs_human_input',
+  blockers: ['Provide queued input.'], verification: [], risks: [], next_action: 'wait'
+});
+await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+const queuedGateId = `${routed.task.id}:cp-queued`;
+const waitingTaskFile = path.join(queueSubdirFor(root, queue, 'waiting'), path.basename(failedFile));
+assert.equal((await readJson(waitingTaskFile)).status, 'waiting_for_human');
+const queuedResolved = await resolveHumanInput(root, { queue, gateId: queuedGateId, input: 'queued-secret' });
+assert.equal(queuedResolved.outcome, 'resolved_and_requeued');
+const queuedAfterInput = await readJson(path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile)));
+assert.equal(queuedAfterInput.status, 'queued');
+assert.equal(JSON.stringify(queuedAfterInput).includes('queued-secret'), false);
+
+// Active tasks are not mutated; their event is consumed at the next safe tick.
+const inboxRequeued = path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile));
+const activeRequeued = path.join(queueSubdirFor(root, queue, 'active'), path.basename(failedFile));
+await rename(inboxRequeued, activeRequeued);
+const activeBefore = await readJson(activeRequeued);
+const activeCheckpoint = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-active.json');
+await writeJson(activeCheckpoint, {
+  version: 1, task_id: routed.task.id, checkpoint_id: 'cp-active', status: 'needs_human_input',
+  blockers: ['Provide active input.'], verification: [], risks: [], next_action: 'wait'
+});
+await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+const activeResolved = await resolveHumanInput(root, { queue, gateId: `${routed.task.id}:cp-active`, input: 'active-secret' });
+assert.equal(activeResolved.outcome, 'resolved_pending_safe_boundary');
+assert.deepEqual(await readJson(activeRequeued), activeBefore);
+await rename(activeRequeued, inboxRequeued);
 await writeJson(failedFile, { ...requeuedTask, status: 'needs_human_input' });
-await rm(path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile)), { force: true });
+await rm(inboxRequeued, { force: true });
 
 const dryRun = await notifyTerminalTasks(root, { queue, dryRun: true });
 assert.equal(dryRun.results[0].outcome, 'dry_run');

@@ -292,6 +292,8 @@ Summaries must cite the latest run/task/project evidence, verification performed
 
 Use scheduler ticks only after manual verification. Adaptive schedules may speed up with successful queued work and back off on empty queues, failures, long runs, or human gates.
 
+`queue-scheduler-tick` is adaptive cadence logic, not a resident daemon. A cron, systemd timer, or equivalent external scheduler must wake it regularly. For project queues that promise automatic continuation, set `scheduler.required=true` and a bounded `scheduler.heartbeatMaxAge`; `doctor` must fail with `scheduler_missing` whenever queued work exists without a fresh scheduler heartbeat.
+
 Progress notification must be scoped and idempotent. Report failures, human gates, status changes, and terminal completion promptly; throttle routine progress and idle updates.
 
 ## Final Checklist
