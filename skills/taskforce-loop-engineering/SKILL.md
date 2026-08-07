@@ -216,7 +216,7 @@ loop-engineering queue-revision-next --root <workspace> --queue <queue> --task-i
 loop-engineering queue-lineage --root <workspace> --queue <queue> --task-id <id>
 loop-engineering queue-lineage-bundle --root <workspace> --queue <queue> --task-id <id>
 loop-engineering queue-human-decision --root <workspace> --queue <queue> --task-id <id> --decision approve|request_changes|reject
-loop-engineering queue-human-input-resolve --root <workspace> --queue <queue> --gate-id <task:checkpoint> --input "<response>"
+loop-engineering queue-human-input-resolve --root <workspace> --queue <queue> --gate-id <task:checkpoint> --input "<response>" [--secret-input|--non-secret-input]
 loop-engineering queue-terminal-notify --root <workspace> --queue <queue> (--notify-command "<command>" | --dry-run)
 loop-engineering queue-human-input-notify --root <workspace> --queue <queue> (--notify-command "<command>" | --dry-run)
 ```

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.4 - 2026-08-07
+
+- Reclaim queue locks immediately when their recorded owner PID no longer
+  exists, even if the lease has not expired. Scheduler status no longer reports
+  those dead-owner locks as live, and an orphaned `active/` task forces recovery
+  on the next timer wake-up instead of waiting for scheduler backoff or lease
+  expiry.
+
+- Distinguish one-time secret human inputs from durable non-sensitive decisions
+  and attestations, so review approvals remain available as structured evidence
+  while OTPs, passwords, tokens, and credential values are still destroyed after
+  consumption.
+- Restrict human-gate reconciliation to the final judgement's effective
+  checkpoint set for every outcome, preventing a project-in-progress tick from
+  resurrecting historical waiting gates after a newer checkpoint clears them.
+- Allow an explicitly superseded human gate to requeue a task from `waiting/`
+  through the normal queue CLI instead of requiring a manual file move.
+
 ## 0.8.3 - 2026-08-07
 
 - Select the latest single-milestone checkpoint by durable checkpoint identity/sequence instead of regenerated acceptance-review timestamps, preventing a lexically late legacy `cp9` review from overriding a blocked `cp46+` checkpoint.

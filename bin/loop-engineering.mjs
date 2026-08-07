@@ -154,6 +154,8 @@ function parseArgs(argv) {
     else if (a === '--notify-command') args.notifyCommand = argv[++i];
     else if (a === '--gate-id') args.gateId = argv[++i];
     else if (a === '--input') args.input = argv[++i];
+    else if (a === '--secret-input') args.secretInput = true;
+    else if (a === '--non-secret-input') args.nonSecretInput = true;
     else if (a === '--source-channel') args.sourceChannel = argv[++i];
     else if (a === '--source-target') args.sourceTarget = argv[++i];
     else if (a === '--source-account') args.sourceAccount = argv[++i];
@@ -2077,7 +2079,7 @@ async function queueRequeueCommand(args) {
   if (!args.taskId) throw new Error('queue-requeue requires --task-id.');
   const config = await loadQueueConfig(args.root, args.config);
   const options = mergeQueueOptions(config, args);
-  const result = await queueRequeue(args.root, options.queue, args.taskId);
+  const result = await queueRequeue(args.root, options.queue, args.taskId, { from: args.from });
   if (args.json) console.log(JSON.stringify(result, null, 2));
   else console.log(`requeued ${result.taskId}: ${result.file}`);
   return 0;

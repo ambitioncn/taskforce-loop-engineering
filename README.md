@@ -370,6 +370,11 @@ loop-engineering queue-human-input-resolve \
 The human-input notifier scans active and terminal tasks, sends the concrete
 checkpoint blocker, and records a `waiting_for_human` gate. Resolution is
 idempotent; a terminal blocked task is requeued with the response attached.
+OTP, password, token, credential, and verification-code gates are inferred as
+one-time secrets and destroyed after consumption. Review decisions, approvals,
+assignments, and attestations remain available in the gate event as durable
+non-sensitive evidence. Use `--secret-input` or `--non-secret-input` to override
+the inference when gate wording is ambiguous.
 
 Goal-directed controllers can use the exported `normalizeGoalDecision`,
 `goalLoopTransition`, and `goalStrategyFingerprint` helpers. They distinguish

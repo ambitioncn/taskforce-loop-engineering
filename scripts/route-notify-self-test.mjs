@@ -11,6 +11,7 @@ import {
   notifyHumanInputRequests,
   notifyTerminalTasks,
   queueHumanDecision,
+  queueDirFor,
   queueStatus,
   queueSubdirFor,
   readJson,
@@ -92,6 +93,14 @@ const orphanInbox = path.join(queueSubdirFor(root, orphanQueue, 'inbox'), orphan
 const orphanActive = path.join(queueSubdirFor(root, orphanQueue, 'active'), orphanName);
 await writeJson(orphanActive, { ...(await readJson(orphanInbox)), status: 'active', startedAt: new Date().toISOString() });
 await rm(orphanInbox, { force: true });
+// A future lease owned by a dead PID must not hide the orphan until expiry.
+await writeJson(path.join(queueDirFor(root, orphanQueue), 'queue.lock'), {
+  version: 1,
+  queue: orphanQueue,
+  pid: 2_147_483_647,
+  acquiredAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 60_000).toISOString()
+});
 await writeJson(path.join(taskRuntimeDirFor(root, orphanQueue, orphanRouted.task.id), 'checkpoints', 'cp-before-crash.json'), {
   version: 1,
   task_id: orphanRouted.task.id,
@@ -118,6 +127,7 @@ assert.ok(orphanRun.progress.some((event) => event.status === 'orphan_recovered'
 const orphanTerminal = await readJson(path.join(root, orphanRun.taskPath));
 assert.equal(orphanTerminal.orphanRecoveryCount, 1);
 assert.equal(orphanTerminal.requeuedFrom, 'active');
+assert.equal(orphanTerminal.recoveryReason, 'dead_queue_lock_owner_pid');
 assert.equal((await readJson(path.join(taskRuntimeDirFor(root, orphanQueue, orphanRouted.task.id), 'checkpoints', 'cp-before-crash.json'))).checkpoint_id, 'cp-before-crash');
 
 const reviewQueue = 'human-review-smoke';
@@ -373,7 +383,7 @@ assert.equal(gateSent.sent, 1);
 const gateId = gateSent.results[0].gateId;
 assert.equal((await readJson(path.join(queueSubdirFor(root, queue, 'waiting'), path.basename(failedFile)))).status, 'waiting_for_human');
 await assert.rejects(access(failedFile));
-const resolved = await resolveHumanInput(root, { queue, gateId, input: '123456', sourceMessageId: 'reply-1' });
+const resolved = await resolveHumanInput(root, { queue, gateId, input: '123456', sourceMessageId: 'reply-1', secretInput: true });
 assert.equal(resolved.outcome, 'resolved_and_requeued');
 const requeuedTask = await readJson(path.join(queueSubdirFor(root, queue, 'inbox'), path.basename(failedFile)));
 assert.equal(requeuedTask.humanInput.secret_received, true);
@@ -381,6 +391,43 @@ assert.equal(requeuedTask.body.includes('123456'), false);
 const resolvedGate = await readJson(path.join(root, resolved.ledger ?? gateSent.results[0].ledger));
 assert.equal(JSON.stringify(resolvedGate).includes('123456'), false);
 assert.equal(resolvedGate.response_sha256.length, 64);
+
+// Non-sensitive decisions and attestations remain available to the next worker
+// tick instead of being destroyed like OTPs and credentials.
+const attestationCheckpoint = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-attestation.json');
+await writeJson(attestationCheckpoint, {
+  version: 1, task_id: routed.task.id, checkpoint_id: 'cp-attestation', status: 'needs_human_input',
+  blockers: [{ id: 'review-decision', reason: 'Provide the independent review decision.' }],
+  verification: [], risks: [], next_action: 'wait'
+});
+await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+const attestationGateId = `${routed.task.id}:cp-attestation`;
+const attestationResolved = await resolveHumanInput(root, {
+  queue,
+  gateId: attestationGateId,
+  input: 'Reviewer accepts the candidate for the next gated stage.'
+});
+assert.equal(attestationResolved.gate.input_kind, 'attestation');
+assert.equal(attestationResolved.gate.secret_received, false);
+assert.equal(attestationResolved.gate.response, 'Reviewer accepts the candidate for the next gated stage.');
+assert.equal(attestationResolved.gate.response_ref, undefined);
+
+// A project-in-progress judgement with a newer effective checkpoint must not
+// resurrect historical waiting gates from older checkpoints.
+const attestationDoneCheckpoint = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-attestation-done.json');
+await writeJson(attestationDoneCheckpoint, {
+  version: 1, task_id: routed.task.id, checkpoint_id: 'cp-attestation-done',
+  revises_checkpoint_id: 'cp-attestation', sequence: 2, status: 'ready_for_acceptance',
+  blockers: [], verification: [{ observation: 'attestation', result: 'accepted' }], risks: [], next_action: 'continue'
+});
+const finalJudgementFile = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'final_judgement.json');
+await writeJson(finalJudgementFile, {
+  version: 1, task_id: routed.task.id, outcome: 'project_in_progress',
+  coverage: { effective_review_ids: ['cp-attestation-done'] }
+});
+const noHistoricalGateReplay = await notifyHumanInputRequests(root, { queue, dryRun: true });
+assert.equal(noHistoricalGateReplay.inspected, 0);
+await rm(finalJudgementFile, { force: true });
 
 // Queued tasks receive a non-sensitive event reference without being moved.
 const queuedCheckpoint = path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-queued.json');
