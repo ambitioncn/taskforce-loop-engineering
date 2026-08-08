@@ -62,7 +62,7 @@ loop-engineering-openclaw-install \
   --queue agent-tasks
 ```
 
-Review the detected agents and planned files. Then install with an existing worker-agent id:
+Review the installation confirmation summary before proceeding. It must show the target platform, absolute platform CLI path, workspace, queue, scheduler, notification routing, and `writes enabled: no (plan only)`. If any field identifies the wrong platform or destination, stop. Then install with an existing worker-agent id:
 
 ```bash
 loop-engineering-openclaw-install \
@@ -90,9 +90,7 @@ If the CLI or integration is missing and the user requested installation or repa
 
 ### Hermes Agent Integration
 
-The core CLI is platform-neutral, but Hermes conversation routing requires its
-own dispatcher and notifier. Generate a plan, confirm installation, then run the
-read-only doctor and disposable smoke:
+The core CLI is platform-neutral, but Hermes conversation routing requires its own dispatcher and notifier. Generate a plan and verify its installation confirmation summary identifies Hermes, the absolute Hermes CLI path, intended workspace and queue, systemd scheduler, source-bound notification routing, and `writes enabled: no (plan only)`. If any field identifies the wrong platform or destination, stop. Confirm installation only after that review, then run the read-only doctor and disposable smoke:
 
 ```bash
 loop-engineering-hermes-install \
