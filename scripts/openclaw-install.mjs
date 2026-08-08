@@ -22,8 +22,12 @@ function parseArgs(argv) {
   return out;
 }
 
-function systemdEscape(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+function systemdEscapePath(value) {
+  return [...Buffer.from(String(value))]
+    .map((byte) => /[A-Za-z0-9/_.:-]/.test(String.fromCharCode(byte))
+      ? String.fromCharCode(byte)
+      : `\\x${byte.toString(16).padStart(2, '0')}`)
+    .join('');
 }
 
 function safeId(value, label) {
@@ -140,7 +144,7 @@ if (command === 'route') {
 }
 
 function schedulerServiceSource({ root, queue }) {
-  return `[Unit]\nDescription=Taskforce Loop Engineering scheduler for ${queue}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory="${systemdEscape(root)}"\nExecStart="${systemdEscape(process.execPath)}" "${systemdEscape(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))}" scheduler-tick --json\n`;
+  return `[Unit]\nDescription=Taskforce Loop Engineering scheduler for ${queue}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
 }
 
 function schedulerTimerSource({ queue }) {

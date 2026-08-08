@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const root = await mkdtemp(path.join(tmpdir(), 'loop-openclaw-install-'));
+const root = await mkdtemp(path.join(tmpdir(), 'loop openclaw 安装-'));
 const deliveryCapture = path.join(root, 'delivery.json');
 const mockOpenClaw = path.join(root, 'mock-openclaw.mjs');
 const mockSystemctl = path.join(root, 'mock-systemctl.mjs');
@@ -66,6 +66,14 @@ const timerFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-
 const service = await readFile(serviceFile, 'utf8');
 const timer = await readFile(timerFile, 'utf8');
 if (!service.includes('scheduler-tick') || !timer.includes('OnUnitActiveSec=1min')) throw new Error('scheduler systemd units were not installed');
+if (service.includes('WorkingDirectory="') || service.includes('ExecStart="') || !service.includes('\\x20') || !service.includes('\\xe5\\xae\\x89\\xe8\\xa3\\x85')) throw new Error('scheduler service paths were not encoded with systemd path escapes');
+const systemdVerify = await new Promise((resolve) => {
+  const child = spawn('systemd-analyze', ['verify', serviceFile, timerFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = ''; child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('error', (error) => resolve({ code: 127, stdout, stderr: `${stderr}${error.message}` }));
+  child.on('close', (code) => resolve({ code, stdout, stderr }));
+});
+if (systemdVerify.code !== 0) throw new Error(`systemd rejected generated scheduler units: ${systemdVerify.stderr || systemdVerify.stdout}`);
 const installSystemctlCalls = await readFile(systemctlCapture, 'utf8');
 if (!installSystemctlCalls.includes('["--user","enable","--now","openclaw-loop-test-tasks-scheduler.timer"]')) throw new Error('scheduler timer was not enabled');
 const schedulerTick = await new Promise((resolve) => {

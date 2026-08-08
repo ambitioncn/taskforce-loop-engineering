@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.5 - 2026-08-08
+
+- Fixed generated systemd scheduler units so `WorkingDirectory` and `ExecStart` use unquoted, byte-safe systemd path escapes.
+- Added real `systemd-analyze verify` coverage for scheduler paths containing spaces and non-ASCII characters.
+
 ## 0.8.4 - 2026-08-07
 
 - Reclaim queue locks immediately when their recorded owner PID no longer
