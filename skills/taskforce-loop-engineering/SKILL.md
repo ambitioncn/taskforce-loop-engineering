@@ -11,7 +11,7 @@ Do not route ordinary chat, research, explanations, or simple direct tasks into 
 
 ## Distribution and CLI Installation
 
-A ClawHub installation may provide only this `SKILL.md`; it does **not** prove that the Loop Engineering CLI or OpenClaw integration is installed. Before running loop commands, check the deployment explicitly:
+A skill installation may provide only this `SKILL.md`; it does **not** prove that the Loop Engineering CLI or an OpenClaw/Hermes integration is installed. Before running loop commands, check the deployment explicitly:
 
 ```bash
 command -v loop-engineering
@@ -87,6 +87,36 @@ loop-engineering-openclaw-smoke \
 ```
 
 If the CLI or integration is missing and the user requested installation or repair, install it within the authorized host/workspace scope, then run doctor and the disposable smoke. If the user only asked what is missing, report the exact package, repository, commands, and current deployment state without mutating the system.
+
+### Hermes Agent Integration
+
+The core CLI is platform-neutral, but Hermes conversation routing requires its
+own dispatcher and notifier. Generate a plan, confirm installation, then run the
+read-only doctor and disposable smoke:
+
+```bash
+loop-engineering-hermes-install \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+
+loop-engineering-hermes-install \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks \
+  --confirm-install
+
+loop-engineering-hermes-doctor \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+
+loop-engineering-hermes-smoke \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+```
+
+The generated worker uses `hermes -z` (`--oneshot`); the notifier uses `hermes send` without
+an LLM call. Preserve source metadata and pass `--source-target` in Hermes
+`platform:chat_id[:thread_id]` format. The managed systemd scheduler owns wakeups
+so durable queue continuity does not depend on resuming a Hermes Cron session.
 
 ## Conversation Contract
 

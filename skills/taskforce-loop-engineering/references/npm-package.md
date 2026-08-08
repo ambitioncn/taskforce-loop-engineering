@@ -1,12 +1,21 @@
 # npm Package
 
 Package name: `taskforce-loop-engineering`
-Version: `0.7.0`
+Version: `0.9.0`
 
 Install from npm:
 
 ```bash
 npm install -g taskforce-loop-engineering
+```
+
+Hermes Agent integration commands:
+
+```bash
+loop-engineering-hermes-install --root /path/to/hermes/workspace --queue agent-tasks
+loop-engineering-hermes-install --root /path/to/hermes/workspace --queue agent-tasks --confirm-install
+loop-engineering-hermes-doctor --root /path/to/hermes/workspace --queue agent-tasks
+loop-engineering-hermes-smoke --root /path/to/hermes/workspace --queue agent-tasks
 ```
 
 Installed commands:

@@ -1,6 +1,6 @@
 # Taskforce Loop Engineering
 
-OpenClaw-native loop engineering for repeated agent work. It provides a small
+Durable loop engineering for repeated agent work on OpenClaw and Hermes Agent. It provides a small
 Node CLI that executes JSON loop specs, records append-only run artifacts, and
 uses a circuit breaker to escalate repeated failures.
 
@@ -113,6 +113,57 @@ managed content was edited. Upgrade installs and enables the scheduler for
 older managed integrations. Uninstall first disables the timer, then removes
 only clean managed files, units, and that exact instructions block; queue
 runtime is explicitly retained.
+
+## Hermes Agent conversation installer
+
+Hermes Agent is supported through a native dispatcher and notifier while the
+platform-neutral Loop Engineering CLI continues to own durable task state,
+checkpoints, revisions, and final judgement. Generate a read-only plan first:
+
+```bash
+loop-engineering-hermes-install \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+```
+
+After review, install the Hermes one-shot worker dispatcher, `hermes send`
+notifier, queue wrapper, workspace routing instructions, and managed systemd
+user timer:
+
+```bash
+loop-engineering-hermes-install \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks \
+  --confirm-install
+```
+
+The dispatcher invokes `hermes -z` (`--oneshot`) with the managed task contract and artifact
+paths. Notifications invoke `hermes send --to` without an LLM call. Conversation
+routing must preserve `--source-target` in Hermes
+`platform:chat_id[:thread_id]` form so progress, human gates, and terminal
+results return to the correct chat. The installer records the absolute Hermes
+executable path so systemd does not depend on an interactive shell `PATH`. The
+scheduler uses systemd rather than a
+Hermes Cron agent session, so queue continuity remains entirely artifact-based.
+This managed installer currently targets Linux hosts with systemd user services;
+the platform-neutral core CLI can still run manually on other Hermes platforms.
+
+Validate the integration and then run a disposable read-only end-to-end smoke:
+
+```bash
+loop-engineering-hermes-doctor \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+
+loop-engineering-hermes-smoke \
+  --root /path/to/hermes/workspace \
+  --queue agent-tasks
+```
+
+The doctor checks the Hermes CLI, `hermes send`, generated files, queue wiring,
+and a delivery dry-run. The smoke creates a temporary queue, executes a bounded
+Hermes worker task, verifies contract/plan/final-judgement artifacts, tests the
+notification return path without sending externally, and removes its artifacts.
 
 ## Commands
 

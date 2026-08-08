@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 - 2026-08-08
+
+- Add a native Hermes Agent conversation integration with a plan-first installer, `hermes -z` one-shot worker dispatcher, `hermes send` notifier, managed scheduler, and source-bound delivery routing.
+- Add a read-only Hermes doctor and disposable end-to-end smoke covering task contracts, checkpoints, final judgement, human-gate scanning, and terminal notification return.
+- Add Hermes integration self-tests, including real systemd unit verification for paths containing spaces and non-ASCII characters.
+
 ## 0.8.5 - 2026-08-08
 
 - Fixed generated systemd scheduler units so `WorkingDirectory` and `ExecStart` use unquoted, byte-safe systemd path escapes.
