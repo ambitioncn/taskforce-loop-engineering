@@ -46,7 +46,9 @@ function run(args) {
 const installBase = ['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--systemctl-bin', mockSystemctl];
 const plan = await run([...installBase, '--json']);
 const planReport = JSON.parse(plan.stdout);
-if (plan.code !== 0 || planReport.status !== 'plan_only' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent) throw new Error(`plan failed: ${plan.stderr}`);
+if (plan.code !== 0 || planReport.status !== 'plan_only' || planReport.platform !== 'openclaw' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent || planReport.confirmationSummary?.targetPlatform !== 'OpenClaw' || planReport.confirmationSummary?.writesEnabled !== false || !path.isAbsolute(planReport.confirmationSummary?.platformCli || '') || !planReport.confirmationSummary?.notificationTarget.includes('OpenClaw')) throw new Error(`plan failed: ${plan.stderr}`);
+const humanPlan = await run(installBase);
+if (humanPlan.code !== 0 || !humanPlan.stdout.includes('Installation confirmation') || !humanPlan.stdout.includes('target platform: OpenClaw') || !humanPlan.stdout.includes('writes enabled: no (plan only)')) throw new Error('human-readable OpenClaw confirmation summary missing');
 const missingWorker = await run([...installBase, '--worker-agent', 'missing', '--json']);
 if (missingWorker.code === 0 || !missingWorker.stderr.includes('does not exist')) throw new Error('installer accepted a missing worker agent');
 const install = await run([...installBase, '--worker-agent', 'builder', '--confirm-install', '--json']);

@@ -67,6 +67,32 @@ async function exists(file) {
   try { await access(file); return true; } catch { return false; }
 }
 
+async function resolveExecutable(command) {
+  if (path.isAbsolute(command) || command.includes(path.sep)) {
+    const resolved = path.resolve(command);
+    if (!await exists(resolved)) throw new Error(`Executable not found: ${resolved}`);
+    return resolved;
+  }
+  for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, command);
+    if (await exists(candidate)) return candidate;
+  }
+  throw new Error(`Executable not found on PATH: ${command}`);
+}
+
+function formatConfirmationSummary(summary) {
+  return [
+    'Installation confirmation',
+    `  target platform: ${summary.targetPlatform}`,
+    `  platform CLI: ${summary.platformCli}`,
+    `  workspace: ${summary.workspace}`,
+    `  queue: ${summary.queue}`,
+    `  scheduler: ${summary.scheduler}`,
+    `  notification target: ${summary.notificationTarget}`,
+    `  writes enabled: ${summary.writesEnabled ? 'yes' : 'no (plan only)'}`
+  ].join('\n');
+}
+
 function dispatcherSource({ workerAgent, openclawBin }) {
   return `#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
@@ -192,6 +218,7 @@ async function main() {
   }
   safeId(args.queue, 'queue');
   if (args.workerAgent) safeId(args.workerAgent, 'worker agent');
+  args.openclawBin = await resolveExecutable(args.openclawBin);
   const worker = await resolveWorkerAgent(args);
   args.workerAgent = worker.workerAgent;
   args.loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
@@ -211,9 +238,11 @@ async function main() {
   };
   const conflicts = [];
   for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const report = { version: 1, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, notificationTarget: 'source-bound at runtime (original OpenClaw conversation)', writesEnabled: args.confirmInstall };
+  const report = { version: 1, platform: 'openclaw', status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   report.next = args.confirmInstall ? 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.' : 'Review this plan, then rerun with --confirm-install.';
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
+  if (!args.json) console.log(formatConfirmationSummary(confirmationSummary));
   if (args.confirmInstall) {
     await mkdir(path.dirname(files.queueConfig), { recursive: true });
     await mkdir(path.dirname(files.dispatcher), { recursive: true });
@@ -272,7 +301,7 @@ async function main() {
       retainedOnUninstall: [`runtime/loops/${args.queue}`]
     }, null, 2)}\n`);
   }
-  console.log(args.json ? JSON.stringify(report, null, 2) : `OpenClaw integration: ${report.status}\nqueue: ${report.queue}\nworker: ${report.workerAgent}\nconflicts: ${report.conflicts.join(', ') || 'none'}\nnext: ${report.next}`);
+  console.log(args.json ? JSON.stringify(report, null, 2) : `OpenClaw integration: ${report.status}\nconflicts: ${report.conflicts.join(', ') || 'none'}\nnext: ${report.next}`);
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

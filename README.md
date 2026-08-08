@@ -39,8 +39,9 @@ when exactly one exists. If there is no unambiguous choice, it fails with the
 available agent ids and asks for `--worker-agent`; it never creates an agent.
 An explicitly selected worker must already exist.
 
-The default is read-only and reports the selected worker and files it would
-create. After review,
+The default is read-only and prints an installation confirmation summary with
+the target platform, absolute platform CLI path, workspace, queue, scheduler,
+notification routing, and whether writes are enabled. After review,
 install the queue, configurable worker dispatcher, atomic route-and-run wrapper,
 channel-neutral asynchronous notifier, workspace health preflight, and managed
 `AGENTS.md` routing block with:
@@ -136,6 +137,10 @@ loop-engineering-hermes-install \
   --queue agent-tasks \
   --confirm-install
 ```
+
+Like the OpenClaw installer, the read-only Hermes plan prints the target
+platform, absolute Hermes CLI path, workspace, queue, scheduler, notification
+routing, and write status before `--confirm-install` can enable changes.
 
 The dispatcher invokes `hermes -z` (`--oneshot`) with the managed task contract and artifact
 paths. Notifications invoke `hermes send --to` without an LLM call. Conversation

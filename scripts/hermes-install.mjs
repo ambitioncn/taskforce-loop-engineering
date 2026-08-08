@@ -44,6 +44,19 @@ function run(command, args, options = {}) {
   });
 }
 
+function formatConfirmationSummary(summary) {
+  return [
+    'Installation confirmation',
+    `  target platform: ${summary.targetPlatform}`,
+    `  platform CLI: ${summary.platformCli}`,
+    `  workspace: ${summary.workspace}`,
+    `  queue: ${summary.queue}`,
+    `  scheduler: ${summary.scheduler}`,
+    `  notification target: ${summary.notificationTarget}`,
+    `  writes enabled: ${summary.writesEnabled ? 'yes' : 'no (plan only)'}`
+  ].join('\n');
+}
+
 function dispatcherSource({ hermesBin }) {
   return `#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
@@ -127,8 +140,10 @@ async function main() {
   const unit = `hermes-loop-${args.queue}-scheduler.service`; const timer = `hermes-loop-${args.queue}-scheduler.timer`;
   const files = { workspaceHealth: path.join(args.root, 'configs/loops/workspace-health.json'), queueConfig: path.join(args.root, 'configs/loops/queues', `${args.queue}.json`), dispatcher: path.join(args.root, 'scripts/loops/hermes-loop-dispatch.mjs'), wrapper: path.join(args.root, 'scripts/loops/hermes-loop.mjs'), notifier: path.join(args.root, 'scripts/loops/hermes-loop-notify.mjs'), manifest: path.join(args.root, 'runtime/loop-engineering-hermes-install.json'), instructions: path.join(args.root, 'AGENTS.md'), schedulerService: path.join(systemdUserDir, unit), schedulerTimer: path.join(systemdUserDir, timer) };
   const conflicts = []; for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const report = { version: 1, platform: 'hermes', status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, hermesBin: args.hermesBin, hermesVersion: (hermes.stdout || hermes.stderr).trim().slice(0, 200), scheduler: { required: true, unit, timer }, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  const confirmationSummary = { targetPlatform: 'Hermes', platformCli: args.hermesBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${timer}`, notificationTarget: 'source-bound at runtime (original Hermes conversation)', writesEnabled: args.confirmInstall };
+  const report = { version: 1, platform: 'hermes', status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, hermesBin: args.hermesBin, hermesVersion: (hermes.stdout || hermes.stderr).trim().slice(0, 200), scheduler: { required: true, unit, timer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
+  if (!args.json) console.log(formatConfirmationSummary(confirmationSummary));
   if (args.confirmInstall) {
     await mkdir(path.dirname(files.queueConfig), { recursive: true }); await mkdir(path.dirname(files.dispatcher), { recursive: true }); await mkdir(path.join(args.root, 'runtime', 'loops', args.queue), { recursive: true });
     if (!await exists(files.workspaceHealth)) await writeFile(files.workspaceHealth, `${JSON.stringify({ id: 'workspace-health', goal: 'Keep this workspace loop-ready and detect obvious drift.', level: 'L1', mode: 'report-only', maxRuntimeMs: 120000, breaker: { maxConsecutiveFailures: 3, sameFailureThreshold: 2 }, checks: [{ id: 'workspace-root', type: 'files', paths: ['.'] }] }, null, 2)}\n`);
@@ -141,6 +156,6 @@ async function main() {
     const marker = instructionsBlock({ queue: args.queue }); const current = await readFile(files.instructions, 'utf8').catch(() => ''); if (!current.includes('<!-- loop-engineering:hermes:start -->')) await appendFile(files.instructions, marker);
     await mkdir(path.dirname(files.manifest), { recursive: true }); await writeFile(files.manifest, `${JSON.stringify({ version: 1, platform: 'hermes', installedAt: new Date().toISOString(), root: args.root, queue: args.queue, hermesBin: args.hermesBin, files: Object.entries(contents).map(([kind, content]) => ({ kind, path: files[kind], sha256: sha256(content) })), scheduler: { unit, timer } }, null, 2)}\n`);
   }
-  console.log(args.json ? JSON.stringify(report, null, 2) : `Hermes Loop installer: ${report.status}\nqueue: ${args.queue}\nscheduler: ${timer}`);
+  console.log(args.json ? JSON.stringify(report, null, 2) : `Hermes Loop installer: ${report.status}\nnext: ${args.confirmInstall ? 'Run loop-engineering-hermes-doctor, then route a harmless smoke task.' : 'Review this summary, then rerun with --confirm-install.'}`);
 }
 main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

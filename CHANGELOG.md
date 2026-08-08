@@ -5,6 +5,7 @@
 - Add a native Hermes Agent conversation integration with a plan-first installer, `hermes -z` one-shot worker dispatcher, `hermes send` notifier, managed scheduler, and source-bound delivery routing.
 - Add a read-only Hermes doctor and disposable end-to-end smoke covering task contracts, checkpoints, final judgement, human-gate scanning, and terminal notification return.
 - Add Hermes integration self-tests, including real systemd unit verification for paths containing spaces and non-ASCII characters.
+- Add an explicit cross-platform installation confirmation summary to both OpenClaw and Hermes plans, showing the target platform, absolute CLI path, workspace, queue, scheduler, notification routing, and write status before installation.
 
 ## 0.8.5 - 2026-08-08
 
