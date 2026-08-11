@@ -34,9 +34,9 @@ if (process.env.SYSTEMCTL_CAPTURE) await appendFile(process.env.SYSTEMCTL_CAPTUR
 `);
 await chmod(mockSystemctl, 0o755);
 const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
-function run(args) {
+function run(args, env = process.env) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [installer, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [installer, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -46,7 +46,13 @@ function run(args) {
 const installBase = ['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--systemctl-bin', mockSystemctl];
 const plan = await run([...installBase, '--json']);
 const planReport = JSON.parse(plan.stdout);
-if (plan.code !== 0 || planReport.status !== 'plan_only' || planReport.platform !== 'openclaw' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent || planReport.confirmationSummary?.targetPlatform !== 'OpenClaw' || planReport.confirmationSummary?.writesEnabled !== false || !path.isAbsolute(planReport.confirmationSummary?.platformCli || '') || !planReport.confirmationSummary?.notificationTarget.includes('OpenClaw')) throw new Error(`plan failed: ${plan.stderr}`);
+if (plan.code !== 0 || planReport.language !== 'en' || planReport.status !== 'plan_only' || planReport.platform !== 'openclaw' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent || planReport.confirmationSummary?.targetPlatform !== 'OpenClaw' || planReport.confirmationSummary?.writesEnabled !== false || !path.isAbsolute(planReport.confirmationSummary?.platformCli || '') || !planReport.confirmationSummary?.notificationTarget.includes('OpenClaw')) throw new Error(`plan failed: ${plan.stderr}`);
+const zhPlan = await run([...installBase, '--language', 'zh']);
+if (zhPlan.code !== 0 || !zhPlan.stdout.includes('安装确认') || !zhPlan.stdout.includes('目标平台：OpenClaw') || !zhPlan.stdout.includes('允许写入：否（仅生成计划）')) throw new Error('explicit Chinese installation summary missing');
+const autoZhPlan = await run([...installBase, '--json'], { ...process.env, LC_ALL: 'zh_CN.UTF-8', LANG: 'C' });
+if (autoZhPlan.code !== 0 || JSON.parse(autoZhPlan.stdout).language !== 'zh') throw new Error('Chinese locale was not auto-detected');
+const explicitEnglishPlan = await run([...installBase, '--language', 'en', '--json'], { ...process.env, LC_ALL: 'zh_CN.UTF-8' });
+if (explicitEnglishPlan.code !== 0 || JSON.parse(explicitEnglishPlan.stdout).language !== 'en') throw new Error('explicit English did not override locale');
 const humanPlan = await run(installBase);
 if (humanPlan.code !== 0 || !humanPlan.stdout.includes('Installation confirmation') || !humanPlan.stdout.includes('target platform: OpenClaw') || !humanPlan.stdout.includes('writes enabled: no (plan only)')) throw new Error('human-readable OpenClaw confirmation summary missing');
 const missingWorker = await run([...installBase, '--worker-agent', 'missing', '--json']);
@@ -55,14 +61,15 @@ const install = await run([...installBase, '--worker-agent', 'builder', '--confi
 if (install.code !== 0 || JSON.parse(install.stdout).status !== 'installed') throw new Error(`install failed: ${install.stderr}`);
 const queue = JSON.parse(await readFile(path.join(root, 'configs/loops/queues/test-tasks.json'), 'utf8'));
 if (queue.dispatcher !== 'node scripts/loops/openclaw-loop-dispatch.mjs') throw new Error('dispatcher was not installed');
+if (queue.language !== 'en') throw new Error('resolved installation language was not persisted');
 if (queue.scheduler?.required !== true || queue.scheduler?.heartbeatMaxAgeMs !== 300000) throw new Error('required scheduler heartbeat was not installed');
 const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
 if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE') || !dispatcher.includes('LOOP_SESSION_GENERATION') || !dispatcher.includes('-g${sessionGeneration}')) throw new Error('worker, recursion guard, amendment polling, or session generation missing');
 if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 10) throw new Error('bounded runtime recovery policy was not installed');
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
-if (!instructions.includes('走 loop') || !instructions.includes('immediately execute')) throw new Error('conversation instructions missing');
+if (!instructions.includes('Use Loop Engineering to fix this issue') || !instructions.includes('Queue this only; do not run it yet') || /走 loop|只入队|只排队/.test(instructions)) throw new Error('English conversation instructions are missing or contain Chinese routing examples');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
-if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('只入队') || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
+if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('queue') || !wrapper.includes('continue') || /只入队|只排队|继续当前/.test(wrapper) || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, localization, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
 const missingSourceRoute = await new Promise((resolve) => {
   const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'route', '--message', '用 loop engineering 对齐系统'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -172,4 +179,11 @@ if (await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8').t
 if (await readFile(serviceFile, 'utf8').then(() => true).catch(() => false) || await readFile(timerFile, 'utf8').then(() => true).catch(() => false)) throw new Error('managed scheduler units survived uninstall');
 const finalSystemctlCalls = await readFile(systemctlCapture, 'utf8');
 if (!finalSystemctlCalls.includes('["--user","disable","--now","openclaw-loop-test-tasks-scheduler.timer"]')) throw new Error('scheduler timer was not disabled during uninstall');
+const zhInstall = await run([...installBase, '--worker-agent', 'builder', '--language', 'zh', '--confirm-install', '--json']);
+if (zhInstall.code !== 0 || JSON.parse(zhInstall.stdout).language !== 'zh') throw new Error(`Chinese installation failed: ${zhInstall.stderr}`);
+const zhQueue = JSON.parse(await readFile(path.join(root, 'configs/loops/queues/test-tasks.json'), 'utf8'));
+const zhInstructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
+const zhDispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
+const zhNotifier = await readFile(path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'utf8');
+if (zhQueue.language !== 'zh' || !zhInstructions.includes('Loop Engineering 会话路由') || !zhDispatcher.includes('已经由 Loop Engineering 管理') || !zhNotifier.includes('通知器需要消息参数')) throw new Error('Chinese installation did not localize generated configuration and runtime files');
 console.log('openclaw installer self-test passed');

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0 - 2026-08-11
+
+- Add OpenClaw installer language adaptation with `--language auto|en|zh`.
+- Auto-select Chinese for Chinese locales and English for all other or missing locales; explicit language selection takes precedence.
+- Persist the resolved language in queue configuration and installer manifests, and localize generated conversation instructions, worker prompts, progress reports, human-input gates, and terminal notifications.
+
 ## 0.9.1 - 2026-08-11
 
 - Recognize explicit `用 loop engineering` requests that ask to align, complete, enhance, develop, or build a system as executable Loop tasks instead of direct chat.

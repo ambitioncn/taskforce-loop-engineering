@@ -54,6 +54,9 @@ assert.deepEqual(classifyLoopMessage('用 loop engineering 把现有的 growth o
   enqueue: true,
   readOnly: false
 });
+assert.equal(classifyLoopMessage('Use Loop Engineering to fix this issue.').intent, 'execute');
+assert.equal(classifyLoopMessage('Run this through Loop Engineering.').intent, 'execute');
+assert.equal(classifyLoopMessage('Continue the current loop with this amendment: add English examples.').intent, 'execute');
 
 const routed = await routeLoopMessage(root, {
   route: true,
@@ -380,10 +383,12 @@ await writeJson(checkpointFile, {
 const failedFile = path.join(queueSubdirFor(root, queue, 'failed'), path.basename(terminalFile));
 await writeJson(failedFile, terminalTask);
 if (failedFile !== terminalFile) await rm(terminalFile, { force: true });
+await writeJson(path.join(root, 'configs', 'loops', 'queues', `${queue}.json`), { queue, language: 'zh' });
 
 const gateDryRun = await notifyHumanInputRequests(root, { queue, dryRun: true });
 assert.equal(gateDryRun.results[0].outcome, 'dry_run');
 assert.match(gateDryRun.results[0].message, /Provide the SMS code/);
+assert.match(gateDryRun.results[0].message, /正在等待你的输入/);
 const gateSent = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(gateSent.sent, 1);
 const gateId = gateSent.results[0].gateId;
@@ -470,6 +475,7 @@ await writeJson(failedFile, { ...requeuedTask, status: 'needs_human_input' });
 await rm(inboxRequeued, { force: true });
 
 const dryRun = await notifyTerminalTasks(root, { queue, dryRun: true });
+assert.match(dryRun.results[0].message, /Loop 任务/);
 assert.equal(dryRun.results[0].outcome, 'dry_run');
 const sent = await notifyTerminalTasks(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(sent.sent, 1);

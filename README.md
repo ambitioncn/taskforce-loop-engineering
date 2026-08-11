@@ -33,6 +33,11 @@ loop-engineering-openclaw-install \
   --queue agent-tasks
 ```
 
+The installer accepts `--language auto|en|zh`. `auto` is the default: Chinese
+locales install Chinese conversation rules and notifications; all other or
+missing locales install English. Use `--language en` or `--language zh` to
+override locale detection explicitly.
+
 The installer reads `openclaw agents list --json` during the plan. Without
 `--worker-agent`, it chooses an existing `main`, or the only available agent
 when exactly one exists. If there is no unambiguous choice, it fails with the
@@ -54,12 +59,20 @@ loop-engineering-openclaw-install \
   --confirm-install
 ```
 
-The generated dispatcher uses a per-task session key of
+In an English installation, conversation requests can use forms such as:
+
+- `Use Loop Engineering to fix this issue.`
+- `Run this through Loop Engineering.`
+- `Queue this only; do not run it yet.`
+- `Continue the current loop with this amendment: ...`
+
+Chinese installations provide equivalent Chinese conversation rules and
+examples. The generated dispatcher uses a per-task session key of
 `agent:<worker-agent>:loop-task-<task-id>` and explicitly marks the task as
 already loop-managed to prevent recursive re-enqueue. Existing generated files
 are not overwritten unless `--force` is supplied after review. The installed
-conversation policy treats `走 loop` as enqueue plus immediate execution;
-`只入队` and `只排队` remain explicit queue-only overrides.
+conversation policy treats an explicit Loop Engineering request as enqueue plus
+immediate execution; explicit queue-only wording remains the override.
 The confirmed installer also creates and enables a managed per-queue systemd
 user timer. It wakes the adaptive scheduler once per minute; the persisted
 scheduler cadence still decides whether work is due. Generated queue configs
@@ -381,7 +394,7 @@ questions from explicit execution handoffs:
 
 ```bash
 loop-engineering route-message \
-  --message "走 loop 修复这个问题" \
+  --message "Use Loop Engineering to fix this issue" \
   --queue agent-tasks \
   --route \
   --confirm-execute \
@@ -888,11 +901,11 @@ loop-engineering queue-human-decision --config configs/loops/queues/agent-tasks.
 `run-queue` processes one task. `run-queue-drain` is an explicit batch/daemon
 command that keeps claiming queued tasks serially until the inbox is empty or
 `--max-tasks` is reached. The generated OpenClaw conversation wrapper does not
-use drain mode: a new `走 loop` request while a task is active supersedes the
+use drain mode: a new explicit Loop Engineering request while a task is active supersedes the
 active task, records the replacement lineage, stops the old dispatcher process
 group, and starts the corrected task after the lock is released. Explicit
-queue-only wording still creates ordinary queued work. `继续当前 loop，补充要求：…`
-uses the amendment path instead: it keeps the same task and worker session,
+queue-only wording still creates ordinary queued work. `Continue the current
+loop with this amendment: ...` uses the amendment path instead: it keeps the same task and worker session,
 writes `amendments/NNNN.json`, increments `amendment_version` in the task
 contract, acceptance plan, and dev plan, and requires the worker to reread the
 latest amendment before each checkpoint and final completion. Both commands use a lease lock so overlapping ticks do not process the same

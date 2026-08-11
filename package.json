@@ -1,6 +1,6 @@
 {
   "name": "taskforce-loop-engineering",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": false,
   "description": "OpenClaw-native loop engineering CLI, templates, and skill for verifiable agent work loops.",
   "type": "module",

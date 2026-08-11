@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 function parseArgs(argv) {
-  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', json: false, confirmInstall: false, force: false };
+  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', language: 'auto', json: false, confirmInstall: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--root') out.root = path.resolve(argv[++i]);
@@ -13,6 +13,7 @@ function parseArgs(argv) {
     else if (arg === '--worker-agent') out.workerAgent = argv[++i];
     else if (arg === '--openclaw-bin') out.openclawBin = argv[++i];
     else if (arg === '--systemctl-bin') out.systemctlBin = argv[++i];
+    else if (arg === '--language') out.language = argv[++i];
     else if (arg === '--confirm-install') out.confirmInstall = true;
     else if (arg === '--force') out.force = true;
     else if (arg === '--json') out.json = true;
@@ -21,6 +22,15 @@ function parseArgs(argv) {
   }
   return out;
 }
+
+function resolveLanguage(requested = 'auto', env = process.env) {
+  if (!['auto', 'en', 'zh'].includes(requested)) throw new Error('--language must be auto, en, or zh.');
+  if (requested !== 'auto') return requested;
+  const locale = String(env.LC_ALL || env.LC_MESSAGES || env.LANG || '').toLowerCase();
+  return /(^|[_.-])zh(?:[_-]|\.|$)/.test(locale) || locale.startsWith('zh') ? 'zh' : 'en';
+}
+
+const text = (language, en, zh) => language === 'zh' ? zh : en;
 
 function systemdEscapePath(value) {
   return [...Buffer.from(String(value))]
@@ -80,7 +90,17 @@ async function resolveExecutable(command) {
   throw new Error(`Executable not found on PATH: ${command}`);
 }
 
-function formatConfirmationSummary(summary) {
+function formatConfirmationSummary(summary, language) {
+  if (language === 'zh') return [
+    '安装确认',
+    `  目标平台：${summary.targetPlatform}`,
+    `  平台 CLI：${summary.platformCli}`,
+    `  工作区：${summary.workspace}`,
+    `  队列：${summary.queue}`,
+    `  调度器：${summary.scheduler}`,
+    `  通知目标：${summary.notificationTarget}`,
+    `  允许写入：${summary.writesEnabled ? '是' : '否（仅生成计划）'}`
+  ].join('\n');
   return [
     'Installation confirmation',
     `  target platform: ${summary.targetPlatform}`,
@@ -93,25 +113,43 @@ function formatConfirmationSummary(summary) {
   ].join('\n');
 }
 
-function dispatcherSource({ workerAgent, openclawBin }) {
+function dispatcherSource({ workerAgent, openclawBin, language }) {
+  const promptLines = language === 'zh' ? [
+    '你收到的是一个已经由 Loop Engineering 管理的任务。',
+    '不要再次路由或入队，即使引用的用户请求中包含 loop 触发词。',
+    '实施前先阅读任务合同、开发计划和验收计划。'
+  ] : [
+    'You are receiving an already loop-managed task.',
+    'Do not route or enqueue this task again, even if its quoted request contains a loop trigger.',
+    'Read the task contract, development plan, and acceptance plan before implementation.'
+  ];
+  const labels = language === 'zh' ? {
+    taskId: '任务 ID', taskContract: '任务合同', devPlan: '开发计划', acceptancePlan: '验收计划',
+    amendments: '实时补充要求', checkpoints: '检查点目录', missing: '未提供',
+    reread: '写入每个检查点以及最终完成前，如果实时补充要求文件存在，请重新读取。所有已记录的补充要求都是任务合同和验收标准的一部分。',
+    finish: '尽可能写入检查点，并包含最新已应用的 amendment_version。最终报告必须包含状态、证据、验证、阻塞和下一步。'
+  } : {
+    taskId: 'Task id', taskContract: 'Task contract', devPlan: 'Development plan', acceptancePlan: 'Acceptance plan',
+    amendments: 'Live amendments', checkpoints: 'Checkpoints dir', missing: 'not provided',
+    reread: 'Before writing each checkpoint and before final completion, reread the live amendment file if it exists. Treat every recorded amendment as part of the task contract and acceptance criteria.',
+    finish: 'Write a checkpoint when possible. Include the latest amendment_version applied. Finish with status, evidence, verification, blockers, and next action.'
+  };
   return `#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 const task = JSON.parse(await readFile(process.env.LOOP_TASK_FILE, 'utf8'));
 const sessionGeneration = Number.parseInt(process.env.LOOP_SESSION_GENERATION || '0', 10) || 0;
 const prompt = [
-  'You are receiving an already loop-managed task.',
-  'Do not route or enqueue this task again, even if its quoted request contains a loop trigger.',
-  'Read the task contract, development plan, and acceptance plan before implementation.',
-  \`Task id: \${task.id}\`,
-  \`Task contract: \${process.env.LOOP_TASK_CONTRACT_FILE || 'not provided'}\`,
-  \`Development plan: \${process.env.LOOP_DEV_PLAN_FILE || 'not provided'}\`,
-  \`Acceptance plan: \${process.env.LOOP_ACCEPTANCE_PLAN_FILE || 'not provided'}\`,
-  \`Live amendments: \${process.env.LOOP_LATEST_AMENDMENT_FILE || 'not provided'}\`,
-  \`Checkpoints dir: \${process.env.LOOP_CHECKPOINTS_DIR || 'not provided'}\`,
+  ${promptLines.map((line) => JSON.stringify(line)).join(',\n  ')},
+  \`${labels.taskId}: \${task.id}\`,
+  \`${labels.taskContract}: \${process.env.LOOP_TASK_CONTRACT_FILE || ${JSON.stringify(labels.missing)}}\`,
+  \`${labels.devPlan}: \${process.env.LOOP_DEV_PLAN_FILE || ${JSON.stringify(labels.missing)}}\`,
+  \`${labels.acceptancePlan}: \${process.env.LOOP_ACCEPTANCE_PLAN_FILE || ${JSON.stringify(labels.missing)}}\`,
+  \`${labels.amendments}: \${process.env.LOOP_LATEST_AMENDMENT_FILE || ${JSON.stringify(labels.missing)}}\`,
+  \`${labels.checkpoints}: \${process.env.LOOP_CHECKPOINTS_DIR || ${JSON.stringify(labels.missing)}}\`,
   '', task.body, '',
-  'Before writing each checkpoint and before final completion, reread the live amendment file if it exists. Treat every recorded amendment as part of the task contract and acceptance criteria.',
-  'Write a checkpoint when possible. Include the latest amendment_version applied. Finish with status, evidence, verification, blockers, and next action.'
+  ${JSON.stringify(labels.reread)},
+  ${JSON.stringify(labels.finish)}
 ].join('\\n');
 const child = spawn(${JSON.stringify(openclawBin)}, [
   'agent', '--agent', ${JSON.stringify(workerAgent)},
@@ -122,7 +160,15 @@ child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 :
 `;
 }
 
-function wrapperSource({ queue, loopBin }) {
+function wrapperSource({ queue, loopBin, language }) {
+  const missingSourceError = text(language, 'loop route requires conversation metadata', 'loop 路由需要会话来源元数据');
+  const usage = text(language, 'Usage: node scripts/loops/openclaw-loop.mjs route --message "Use loop: task" [source metadata]', '用法：node scripts/loops/openclaw-loop.mjs route --message "走 loop：任务" [来源元数据]');
+  const amendmentPattern = language === 'zh'
+    ? '(?:继续(?:当前|这个)?\\s*loop|给(?:当前|这个)?\\s*loop\\s*(?:补充|增加|加)|补充当前\\s*loop)'
+    : '(?:continue\\s+(?:the\\s+)?(?:current\\s+)?loop|amend\\s+(?:the\\s+)?(?:current\\s+)?loop|add\\s+(?:this\\s+)?amendment\\s+to\\s+(?:the\\s+)?(?:current\\s+)?loop)';
+  const queueOnlyPattern = language === 'zh'
+    ? '(?:只入队|只排队|暂不执行|不立即执行)'
+    : '(?:queue\\s+(?:this|it)\\s+only|only\\s+queue\\s+(?:this|it)|enqueue\\s+(?:this|it)\\s+only|do\\s+not\\s+(?:run|execute)\\s+(?:this|it)\\s+(?:yet|now))';
   return `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
 const [command, ...rest] = process.argv.slice(2);
@@ -151,14 +197,14 @@ if (command === 'route') {
   const requiredSource = ['--source-channel', '--source-target', '--source-account', '--source-message-id'];
   const missingSource = requiredSource.filter((name) => !optionValue(name));
   if (missingSource.length) {
-    console.error(\`loop route requires conversation metadata: \${missingSource.join(', ')}\`);
+    console.error(\`${missingSourceError}: \${missingSource.join(', ')}\`);
     process.exitCode = 2;
     process.exit();
   }
-  const amendment = /(?:继续(?:当前|这个)?\\s*loop|给(?:当前|这个)?\\s*loop\\s*(?:补充|增加|加)|补充当前\\s*loop)/i.test(message);
+  const amendment = new RegExp(${JSON.stringify(amendmentPattern)}, 'i').test(message);
   const routeMode = amendment ? '--amend-active' : '--supersede-active';
   const routeCode = await run(['route-message', '--queue', ${JSON.stringify(queue)}, '--route', '--confirm-execute', routeMode, ...rest]);
-  const queueOnly = /(?:只入队|只排队|暂不执行|不立即执行)/.test(message);
+  const queueOnly = new RegExp(${JSON.stringify(queueOnlyPattern)}, 'i').test(message);
   const runCode = routeCode || queueOnly || amendment ? routeCode : await runWhenUnlocked(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
@@ -174,30 +220,33 @@ if (command === 'route') {
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;
 } else {
-  console.error('Usage: node scripts/loops/openclaw-loop.mjs route --message "走 loop：任务" [source metadata]');
+  console.error(${JSON.stringify(usage)});
   process.exitCode = 1;
 }
 `;
 }
 
-function schedulerServiceSource({ root, queue }) {
-  return `[Unit]\nDescription=Taskforce Loop Engineering scheduler for ${queue}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
+function schedulerServiceSource({ root, queue, language }) {
+  return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
 }
 
-function schedulerTimerSource({ queue }) {
-  return `[Unit]\nDescription=Wake Taskforce Loop Engineering scheduler for ${queue}\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=1min\nAccuracySec=10s\nPersistent=true\nUnit=openclaw-loop-${queue}-scheduler.service\n\n[Install]\nWantedBy=timers.target\n`;
+function schedulerTimerSource({ queue, language }) {
+  return `[Unit]\nDescription=${text(language, `Wake Taskforce Loop Engineering scheduler for ${queue}`, `唤醒 ${queue} 的 Taskforce Loop Engineering 调度器`)}\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=1min\nAccuracySec=10s\nPersistent=true\nUnit=openclaw-loop-${queue}-scheduler.service\n\n[Install]\nWantedBy=timers.target\n`;
 }
 
-function notifierSource({ openclawBin }) {
+function notifierSource({ openclawBin, language }) {
+  const missingMessage = text(language, 'loop notifier requires a message argument.', 'loop 通知器需要消息参数。');
+  const invalidSource = text(language, 'loop notifier received invalid source metadata.', 'loop 通知器收到无效的来源元数据。');
+  const unscoped = text(language, 'loop notifier requires source.channel and source.target; refusing an unscoped delivery.', 'loop 通知器需要 source.channel 和 source.target；拒绝无范围投递。');
   return `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
 const message = process.argv.slice(2).join(' ').trim();
 const rawSource = process.env.LOOP_HUMAN_INPUT_SOURCE || process.env.LOOP_NOTIFICATION_SOURCE || '';
-if (!message) { console.error('loop notifier requires a message argument.'); process.exit(2); }
+if (!message) { console.error(${JSON.stringify(missingMessage)}); process.exit(2); }
 let source;
-try { source = JSON.parse(rawSource); } catch { console.error('loop notifier received invalid source metadata.'); process.exit(2); }
+try { source = JSON.parse(rawSource); } catch { console.error(${JSON.stringify(invalidSource)}); process.exit(2); }
 if (!source || typeof source !== 'object' || !source.channel || !source.target) {
-  console.error('loop notifier requires source.channel and source.target; refusing an unscoped delivery.');
+  console.error(${JSON.stringify(unscoped)});
   process.exit(2);
 }
 const args = ['message', 'send', '--channel', String(source.channel), '--target', String(source.target), '--message', message, '--json'];
@@ -209,12 +258,25 @@ child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 :
 `;
 }
 
-function instructionsBlock({ queue }) {
+function instructionsBlock({ queue, language }) {
+  if (language === 'zh') return `\n<!-- loop-engineering:openclaw:start -->
+## Loop Engineering 会话路由
+
+- 仅路由明确要求使用 Loop 的请求。\`走 loop\` 表示入队并立即执行一次；只有 \`只入队\` 或 \`只排队\` 才不立即执行。
+- \`用 loop engineering\`、\`丢进 Ironman loop\`、\`loop Ironman\` 和 \`task-runner\` 也属于明确的 Loop 请求。
+- 从当前工作区运行 \`node scripts/loops/openclaw-loop.mjs route --message "<完整用户消息>"\`，并保留来源元数据。
+- 会话来源任务必须使用标准包装器。缺少来源元数据时必须失败关闭，不能退回手工入队或直接运行队列。
+- 人工门禁或终态只有在通知命令成功并写入通知记录后才算已送达。
+- 已由 Loop 管理的任务必须直接执行，不能再次路由。
+- 状态查询只读。高风险外部动作、破坏性操作、生产变更、凭据操作和记忆迁移仍需单独确认。
+- 队列：\`${queue}\`。
+<!-- loop-engineering:openclaw:end -->\n`;
   return `\n<!-- loop-engineering:openclaw:start -->
 ## Loop Engineering conversation routing
 
-- Route only explicit loop requests. \`走 loop\` means enqueue and immediately execute one tick; only \`只入队\` or \`只排队\` suppresses execution.
-- Treat explicit phrases such as \`用 loop engineering\`, \`丢进 Ironman loop\`, \`loop Ironman\`, and \`task-runner\` as Loop requests too.
+- Route only explicit Loop Engineering requests. For example, \`Use Loop Engineering to fix this issue\` and \`Run this through Loop Engineering\` enqueue the request and immediately execute one tick.
+- \`Queue this only; do not run it yet\` suppresses immediate execution. \`Continue the current loop with this amendment: ...\` amends the active task instead of replacing it.
+- Treat explicit references to \`Loop Engineering\`, \`the loop\`, \`task-runner\`, or a named loop queue as Loop requests.
 - Run \`node scripts/loops/openclaw-loop.mjs route --message "<full user message>"\` from this workspace and preserve source metadata when available.
 - For conversation-originated work, the standard wrapper is mandatory. Missing source metadata must fail closed; never fall back to manual enqueue or direct run-queue.
 - A human-gated or terminal state is not delivered until its notification command succeeds and writes a notification record.
@@ -226,8 +288,9 @@ function instructionsBlock({ queue }) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  args.language = resolveLanguage(args.language);
   if (args.help) {
-    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--openclaw-bin openclaw] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]');
+    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--language auto|en|zh] [--openclaw-bin openclaw] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]');
     return;
   }
   safeId(args.queue, 'queue');
@@ -252,11 +315,11 @@ async function main() {
   };
   const conflicts = [];
   for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, notificationTarget: 'source-bound at runtime (original OpenClaw conversation)', writesEnabled: args.confirmInstall };
-  const report = { version: 1, platform: 'openclaw', status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
-  report.next = args.confirmInstall ? 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.' : 'Review this plan, then rerun with --confirm-install.';
+  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, notificationTarget: text(args.language, 'source-bound at runtime (original OpenClaw conversation)', '运行时绑定到原始 OpenClaw 会话'), writesEnabled: args.confirmInstall };
+  const report = { version: 1, platform: 'openclaw', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  report.next = args.confirmInstall ? text(args.language, 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.', '运行 loop-engineering-openclaw-doctor，然后路由一个无害的冒烟任务。') : text(args.language, 'Review this plan, then rerun with --confirm-install.', '检查此计划，然后使用 --confirm-install 重新运行。');
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
-  if (!args.json) console.log(formatConfirmationSummary(confirmationSummary));
+  if (!args.json) console.log(formatConfirmationSummary(confirmationSummary, args.language));
   if (args.confirmInstall) {
     await mkdir(path.dirname(files.queueConfig), { recursive: true });
     await mkdir(path.dirname(files.dispatcher), { recursive: true });
@@ -271,6 +334,7 @@ async function main() {
     }
     const queueContent = `${JSON.stringify({
       queue: args.queue,
+      language: args.language,
       description: `OpenClaw conversation queue dispatched to agent ${args.workerAgent}.`,
       dispatcher: 'node scripts/loops/openclaw-loop-dispatch.mjs',
       preflightConfig: 'configs/loops/workspace-health.json',
@@ -300,7 +364,7 @@ async function main() {
     if (!instructions.includes('<!-- loop-engineering:openclaw:start -->')) await appendFile(files.instructions, managedInstructions);
     await mkdir(path.dirname(files.manifest), { recursive: true });
     await writeFile(files.manifest, `${JSON.stringify({
-      version: 2, queue: args.queue, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
+      version: 3, queue: args.queue, language: args.language, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
       managedFiles: [
         { path: path.relative(args.root, files.queueConfig), sha256: sha256(queueContent) },
         { path: path.relative(args.root, files.dispatcher), sha256: sha256(dispatcherContent) },
@@ -315,7 +379,7 @@ async function main() {
       retainedOnUninstall: [`runtime/loops/${args.queue}`]
     }, null, 2)}\n`);
   }
-  console.log(args.json ? JSON.stringify(report, null, 2) : `OpenClaw integration: ${report.status}\nconflicts: ${report.conflicts.join(', ') || 'none'}\nnext: ${report.next}`);
+  console.log(args.json ? JSON.stringify(report, null, 2) : text(args.language, `OpenClaw integration: ${report.status}\nconflicts: ${report.conflicts.join(', ') || 'none'}\nnext: ${report.next}`, `OpenClaw 集成：${report.status}\n冲突：${report.conflicts.join(', ') || '无'}\n下一步：${report.next}`));
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

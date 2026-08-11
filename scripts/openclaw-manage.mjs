@@ -73,7 +73,7 @@ async function main() {
     if (!plan.ready) throw new Error(`Refusing upgrade because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
     const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--language', manifest.language || 'en', '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
       child.on('close', (code) => resolve({ code, stdout, stderr }));
     });
