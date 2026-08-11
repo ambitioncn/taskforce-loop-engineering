@@ -144,6 +144,17 @@ async function runWhenUnlocked(args, waitMs = 300000) {
 if (command === 'route') {
   const messageIndex = rest.indexOf('--message');
   const message = messageIndex >= 0 ? String(rest[messageIndex + 1] || '') : '';
+  const optionValue = (name) => {
+    const index = rest.indexOf(name);
+    return index >= 0 ? String(rest[index + 1] || '').trim() : '';
+  };
+  const requiredSource = ['--source-channel', '--source-target', '--source-account', '--source-message-id'];
+  const missingSource = requiredSource.filter((name) => !optionValue(name));
+  if (missingSource.length) {
+    console.error(\`loop route requires conversation metadata: \${missingSource.join(', ')}\`);
+    process.exitCode = 2;
+    process.exit();
+  }
   const amendment = /(?:继续(?:当前|这个)?\\s*loop|给(?:当前|这个)?\\s*loop\\s*(?:补充|增加|加)|补充当前\\s*loop)/i.test(message);
   const routeMode = amendment ? '--amend-active' : '--supersede-active';
   const routeCode = await run(['route-message', '--queue', ${JSON.stringify(queue)}, '--route', '--confirm-execute', routeMode, ...rest]);
@@ -203,7 +214,10 @@ function instructionsBlock({ queue }) {
 ## Loop Engineering conversation routing
 
 - Route only explicit loop requests. \`走 loop\` means enqueue and immediately execute one tick; only \`只入队\` or \`只排队\` suppresses execution.
+- Treat explicit phrases such as \`用 loop engineering\`, \`丢进 Ironman loop\`, \`loop Ironman\`, and \`task-runner\` as Loop requests too.
 - Run \`node scripts/loops/openclaw-loop.mjs route --message "<full user message>"\` from this workspace and preserve source metadata when available.
+- For conversation-originated work, the standard wrapper is mandatory. Missing source metadata must fail closed; never fall back to manual enqueue or direct run-queue.
+- A human-gated or terminal state is not delivered until its notification command succeeds and writes a notification record.
 - An already loop-managed task must be executed directly and never routed again.
 - Status questions are read-only. High-risk external, destructive, production, credential, or memory migration actions remain separately gated.
 - Queue: \`${queue}\`.

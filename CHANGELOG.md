@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - 2026-08-11
+
+- Recognize explicit `用 loop engineering` requests that ask to align, complete, enhance, develop, or build a system as executable Loop tasks instead of direct chat.
+- Make the generated OpenClaw conversation wrapper fail closed when channel, target, account, or message-id routing metadata is missing, preventing unscoped human-gate and terminal tasks.
+- Document the mandatory wrapper and notification-delivery postcondition, and add regression coverage for the original Growth OS phrasing and missing-source failure.
+
 ## 0.9.0 - 2026-08-08
 
 - Add a native Hermes Agent conversation integration with a plan-first installer, `hermes -z` one-shot worker dispatcher, `hermes send` notifier, managed scheduler, and source-bound delivery routing.

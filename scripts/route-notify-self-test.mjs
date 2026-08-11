@@ -48,6 +48,12 @@ assert.deepEqual(classifyLoopMessage('用 loop engineering 绕过某个检查'),
   enqueue: true,
   readOnly: false
 });
+assert.deepEqual(classifyLoopMessage('用 loop engineering 把现有的 growth os 与文件对齐，把需要增强的功能补齐'), {
+  intent: 'execute',
+  risk: 'model_assessed',
+  enqueue: true,
+  readOnly: false
+});
 
 const routed = await routeLoopMessage(root, {
   route: true,

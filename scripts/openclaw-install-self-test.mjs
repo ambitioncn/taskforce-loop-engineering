@@ -62,7 +62,13 @@ if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTick
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('走 loop') || !instructions.includes('immediately execute')) throw new Error('conversation instructions missing');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
-if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('只入队')) throw new Error('supersede/amend routing, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
+if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('只入队') || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
+const missingSourceRoute = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'route', '--message', '用 loop engineering 对齐系统'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.on('close', (code) => resolve({ code, stderr }));
+});
+if (missingSourceRoute.code !== 2 || !missingSourceRoute.stderr.includes('requires conversation metadata')) throw new Error('installed wrapper did not fail closed without source routing');
 const serviceFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.service');
 const timerFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.timer');
 const service = await readFile(serviceFile, 'utf8');
