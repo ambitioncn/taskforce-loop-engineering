@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+## 0.12.0 - 2026-08-13
+
+- Add P3 read-only Operator Dashboard, normalized schema, loopback HTTP/JSON API, static export, inspect and health commands.
+- Integrate P0 gates, P1 reconciliation and P2 ownership/lease/handoff projections with legacy artifacts.
+- Add redaction, traversal/XSS/bind protections and deterministic/security/performance coverage.
+
+## 0.11.0 - 2026-08-13
+
+- Add Human-Gate Lifecycle v2 parked waits for human input and external conditions, configurable timeout/reminder/escalation policy, durable idempotent notification evidence, verified recovery signals, and exactly-once execution-boundary metadata.
+- Extend `queue-status` with operator-visible waiting states and add `queue-park`, `queue-wait-tick`, and `queue-wait-resume` commands.
+- Add a VPS-down/SSH-banner-timeout regression fixture proving throttled reminders, preserved unconsumed authorization, verified resume, and restart-safe idempotency.
+- Add the durable Action Idempotency and Reservation Contract with immutable request fingerprints, scoped authorization ledger, atomic leased claims and fencing tokens, settlement/release evidence, unknown-outcome reconciliation, paid-call/notification/deployment adapters, operator CLI commands, and backward-compatible artifact import.
+- Add concurrency and crash-restart acceptance coverage while preserving Human-Gate Lifecycle v2.
+- Add the P2 Multi-Agent Control Plane: typed todos, agent capability registration, deterministic atomic claim with lease/fencing, dependency and quota eligibility, durable handoff, orphan recovery, legacy import, ownership audit, CLI, schema, docs, and P0/P1 safety integration.
+
 ## 0.10.0 - 2026-08-11
 
 - Add OpenClaw installer language adaptation with `--language auto|en|zh`.

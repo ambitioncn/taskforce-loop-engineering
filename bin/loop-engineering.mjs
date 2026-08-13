@@ -38,6 +38,8 @@ import {
   nextState,
   notifyTerminalTasks,
   notifyHumanInputRequests,
+  parkQueueTask,
+  resumeParkedTask,
   resolveHumanInput,
   enqueueTask,
   projectIntake,
@@ -56,6 +58,7 @@ import {
   queueSchedulerTick,
   queueSubdirFor,
   queueStatus,
+  tickParkedTasks,
   routeLoopMessage,
   summarizeLoopRuns,
   runCheck,
@@ -68,6 +71,34 @@ import {
   workflowTuningPlan,
   writeJson
 } from '../lib/core.mjs';
+import {
+  claimAction,
+  inspectAction,
+  reconcileAction,
+  releaseAction,
+  reserveAction,
+  settleAction
+} from '../lib/action-reservations.mjs';
+import {
+  claimTodo,
+  createTodo,
+  decideHandoff,
+  handoffTodo,
+  importLegacyTodos,
+  inspectTodo,
+  listTodos,
+  recoverTodos,
+  registerAgent,
+  releaseTodo,
+  renewTodo
+} from '../lib/todo-control-plane.mjs';
+import {
+  buildOperatorProjection,
+  createDashboardServer,
+  dashboardHealth,
+  exportDashboard,
+  filterProjection
+} from '../lib/operator-dashboard.mjs';
 
 function parseArgs(argv) {
   const args = { _: [], root: process.cwd(), json: false, force: false };
@@ -107,6 +138,13 @@ function parseArgs(argv) {
       args.checks.push(argv[++i]);
     }
     else if (a === '--task-id') args.taskId = argv[++i];
+    else if (a === '--todo-id') args.todoId = argv[++i];
+    else if (a === '--agent-id') args.agentId = argv[++i];
+    else if (a === '--target-agent-id') args.targetAgentId = argv[++i];
+    else if (a === '--handoff-id') args.handoffId = argv[++i];
+    else if (a === '--todo-json') args.todoJson = argv[++i];
+    else if (a === '--agent-json') args.agentJson = argv[++i];
+    else if (a === '--state') args.todoState = argv[++i];
     else if (a === '--run-id') args.runId = argv[++i];
     else if (a === '--output') args.output = argv[++i];
     else if (a === '--output-dir') {
@@ -147,10 +185,31 @@ function parseArgs(argv) {
     else if (a === '--stale-after') args.staleAfter = argv[++i];
     else if (a === '--until') args.until = argv[++i];
     else if (a === '--reason') args.reason = argv[++i];
+    else if (a === '--wait-kind') args.waitKind = argv[++i];
+    else if (a === '--wait-id') args.waitId = argv[++i];
+    else if (a === '--execution-key') args.executionKey = argv[++i];
+    else if (a === '--idempotency-key') args.idempotencyKey = argv[++i];
+    else if (a === '--kind') args.kind = argv[++i];
+    else if (a === '--authorization-scope') args.authorizationScope = argv[++i];
+    else if (a === '--request-json') args.requestJson = argv[++i];
+    else if (a === '--fencing-token') args.fencingToken = Number.parseInt(argv[++i], 10);
+    else if (a === '--completed') args.completed = true;
+    else if (a === '--outcome') args.outcome = argv[++i];
+    else if (a === '--evidence') args.evidence = argv[++i];
+    else if (a === '--recovery-signal') args.recoverySignal = argv[++i];
+    else if (a === '--now') args.now = argv[++i];
+    else if (a === '--reminder-interval-ms') args.reminderIntervalMs = Number.parseInt(argv[++i], 10);
+    else if (a === '--escalation-interval-ms') args.escalationIntervalMs = Number.parseInt(argv[++i], 10);
+    else if (a === '--wait-timeout-ms') args.waitTimeoutMs = Number.parseInt(argv[++i], 10);
+    else if (a === '--max-reminders') args.maxReminders = Number.parseInt(argv[++i], 10);
     else if (a === '--decision') args.decision = argv[++i];
     else if (a === '--comment') args.comment = argv[++i];
     else if (a === '--reviewer') args.reviewer = argv[++i];
     else if (a === '--limit') args.limit = Number.parseInt(argv[++i], 10);
+    else if (a === '--host') args.host = argv[++i];
+    else if (a === '--port') args.port = Number.parseInt(argv[++i], 10);
+    else if (a === '--query') args.query = argv[++i];
+    else if (a === '--max-age-seconds') args.maxAgeSeconds = Number.parseInt(argv[++i], 10);
     else if (a === '--notify-command') args.notifyCommand = argv[++i];
     else if (a === '--gate-id') args.gateId = argv[++i];
     else if (a === '--input') args.input = argv[++i];
@@ -185,8 +244,10 @@ function parseArgs(argv) {
     else if (a === '--supersede-active') args.supersedeActive = true;
     else if (a === '--amend-active') args.amendActive = true;
     else if (a === '--dry-run') args.dryRun = true;
+    else if (a === '--verified') args.verified = true;
     else if (a === '--allow-dirty') args.allowDirty = true;
     else if (a === '--include-orphans') args.includeOrphans = true;
+    else if (a === '--allow-non-loopback') args.allowNonLoopback = true;
     else if (a === '--json') args.json = true;
     else if (a === '--force') args.force = true;
     else if (a === '--help' || a === '-h') args.help = true;
@@ -1552,6 +1613,10 @@ Usage:
   loop-engineering status [--config configs/loops/name.json] [--root <workspace>]
   loop-engineering summarize [--id name | --queue name] [--limit 20] [--root <workspace>] [--json]
   loop-engineering doctor [--root <workspace>] [--json]
+  loop-engineering dashboard-inspect [--id todo-id] [--state state] [--query text] [--root <workspace>] [--json]
+  loop-engineering dashboard-health [--max-age-seconds 3600] [--root <workspace>] [--json]
+  loop-engineering dashboard-export --output-dir directory [--root <workspace>] [--json]
+  loop-engineering dashboard-serve [--host 127.0.0.1] [--port 0] [--allow-non-loopback] [--root <workspace>]
   loop-engineering repair-plan --id name [--output repair-plan.json] [--root <workspace>] [--json] [--force]
   loop-engineering project-intake --name project --brief "Project brief" [--type auto|web_app|code_project|research|content|ops|qa|knowledge_base|infra_audit|assistant_workflow] [--queue name] [--check "npm test"] [--root <workspace>] [--json]
   loop-engineering project-plan --project project [--root <workspace>] [--json] [--force]
@@ -1562,6 +1627,15 @@ Usage:
   loop-engineering run-queue --queue name --dispatcher "command" [--preflight-config configs/loops/name.json] [--root <workspace>]
   loop-engineering run-queue-drain --config configs/loops/queues/name.json [--max-tasks 100] [--root <workspace>]
   loop-engineering queue-status --queue name [--root <workspace>] [--json]
+  loop-engineering queue-park --queue name --task-id id --wait-kind human_input|external_condition --reason "..." [--wait-timeout-ms N --reminder-interval-ms N --escalation-interval-ms N --max-reminders N] [--root <workspace>] [--json]
+  loop-engineering action-reserve --idempotency-key key --kind paid_api|notification|deployment|process_control|publication|external_message|gated_mutation --authorization-scope scope --request-json '{}' [--root <workspace>]
+  loop-engineering action-claim --idempotency-key key --owner worker [--lease-ms N] [--root <workspace>]
+  loop-engineering action-inspect --idempotency-key key [--root <workspace>]
+  loop-engineering action-settle --idempotency-key key --fencing-token N [--evidence text] [--root <workspace>]
+  loop-engineering action-release --idempotency-key key [--fencing-token N] --reason text [--evidence text] [--root <workspace>]
+  loop-engineering action-reconcile --idempotency-key key --outcome accepted|not_accepted --evidence text [--root <workspace>]
+  loop-engineering queue-wait-tick --queue name (--notify-command "command" | --dry-run) [--now ISO] [--root <workspace>] [--json]
+  loop-engineering queue-wait-resume --queue name --task-id id --verified --recovery-signal "..." [--root <workspace>] [--json]
   loop-engineering queue-terminal-notify --queue name (--notify-command "command" | --dry-run) [--root <workspace>] [--json]
   loop-engineering queue-scheduler-tick --queue name [--config configs/loops/queues/name.json] [--plan-only] [--force-due] [--initial-interval 10m] [--min-interval 1m] [--max-interval 4h] [--jitter 30s] [--no-progress-report] [--progress-report-interval 30m] [--progress-notify-command "command"] [--root <workspace>] [--json]
   loop-engineering queue-init --queue name [--root <workspace>] [--force]
@@ -2009,6 +2083,34 @@ async function queueHumanInputResolveCommand(args) {
   const result = await resolveHumanInput(args.root, args);
   if (args.json) console.log(JSON.stringify(result, null, 2));
   else console.log(`${result.gate.gate_id}: ${result.outcome}`);
+  return 0;
+}
+
+async function queueParkCommand(args) {
+  if (!args.queue || !args.taskId) throw new Error('queue-park requires --queue and --task-id.');
+  const result = await parkQueueTask(args.root, {
+    ...args,
+    kind: args.waitKind,
+    policy: { timeoutMs: args.waitTimeoutMs, reminderIntervalMs: args.reminderIntervalMs, escalationIntervalMs: args.escalationIntervalMs, maxReminders: args.maxReminders }
+  });
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`${args.taskId}: ${result.outcome}`);
+  return 0;
+}
+
+async function queueWaitTickCommand(args) {
+  if (!args.queue) throw new Error('queue-wait-tick requires --queue.');
+  const result = await tickParkedTasks(args.root, args);
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`${result.queue}: inspected=${result.inspected} sent=${result.sent} failed=${result.failed}`);
+  return result.failed > 0 ? 1 : 0;
+}
+
+async function queueWaitResumeCommand(args) {
+  if (!args.queue || !args.taskId) throw new Error('queue-wait-resume requires --queue and --task-id.');
+  const result = await resumeParkedTask(args.root, args);
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`${args.taskId}: ${result.outcome}`);
   return 0;
 }
 
@@ -5501,6 +5603,9 @@ async function main() {
   if (command === 'status') return statusCommand(args);
   if (command === 'summarize') return summarizeCommand(args);
   if (command === 'doctor') return doctorCommand(args);
+  if (command.startsWith('dashboard-')) return dashboardCommand(command, args);
+  if (command === 'agent-register' || command.startsWith('todo-')) return todoControlPlaneCommand(command, args);
+  if (command.startsWith('action-')) return actionReservationCommand(command, args);
   if (command === 'repair-plan') return repairPlanCommand(args);
   if (command === 'project-intake') return projectIntakeCommand(args);
   if (command === 'project-plan') return projectPlanCommand(args);
@@ -5510,6 +5615,9 @@ async function main() {
   if (command === 'run-queue') return runQueueCommand(args);
   if (command === 'run-queue-drain') return runQueueDrainCommand(args);
   if (command === 'queue-status') return queueStatusCommand(args);
+  if (command === 'queue-park') return queueParkCommand(args);
+  if (command === 'queue-wait-tick') return queueWaitTickCommand(args);
+  if (command === 'queue-wait-resume') return queueWaitResumeCommand(args);
   if (command === 'queue-terminal-notify') return queueTerminalNotifyCommand(args);
   if (command === 'queue-human-input-notify') return queueHumanInputNotifyCommand(args);
   if (command === 'queue-human-input-resolve') return queueHumanInputResolveCommand(args);
@@ -5559,6 +5667,79 @@ async function main() {
   if (command === 'code-worktree-cleanup-plan') return codeWorktreeCleanupPlanCommand(args);
   if (command === 'code-worktree-cleanup') return codeWorktreeCleanupCommand(args);
   throw new Error(`Unknown command: ${command}`);
+}
+
+async function dashboardCommand(command, args) {
+  if (command === 'dashboard-serve') {
+    const server = await createDashboardServer(args.root, { host: args.host, port: args.port, allowNonLoopback: args.allowNonLoopback });
+    const address = server.address();
+    console.log(JSON.stringify({ status: 'serving', read_only: true, address }, null, 2));
+    return new Promise((resolve) => {
+      const stop = () => server.close(() => resolve(0));
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+    });
+  }
+  if (command === 'dashboard-export') {
+    if (!args.outputDir || args.outputDir === true) throw new Error('dashboard-export requires --output-dir.');
+    console.log(JSON.stringify(await exportDashboard(args.root, args.outputDir, { now: args.now }), null, 2));
+    return 0;
+  }
+  const projection = await buildOperatorProjection(args.root, { now: args.now });
+  if (command === 'dashboard-health') {
+    const result = dashboardHealth(projection, { maxAgeSeconds: args.maxAgeSeconds });
+    console.log(JSON.stringify(result, null, 2)); return result.status === 'ok' ? 0 : 2;
+  }
+  if (command === 'dashboard-inspect') {
+    const filtered = filterProjection(projection, { query: args.query, state: args.todoState });
+    const result = args.id ? filtered.todos.find((item) => item.id === args.id) ?? filtered.queues.flatMap((queue) => queue.tasks).find((item) => item.id === args.id) ?? null : filtered;
+    console.log(JSON.stringify(result, null, 2)); return result === null ? 1 : 0;
+  }
+  throw new Error(`Unknown command: ${command}`);
+}
+
+async function jsonInput(raw, label) {
+  if (!raw) throw new Error(`${label} is required.`);
+  if (raw.trim().startsWith('{')) return JSON.parse(raw);
+  return JSON.parse(await readFile(path.resolve(raw), 'utf8'));
+}
+
+async function todoControlPlaneCommand(command, args) {
+  let result;
+  if (command === 'agent-register') result = await registerAgent(args.root, await jsonInput(args.agentJson, '--agent-json'));
+  else if (command === 'todo-create') result = await createTodo(args.root, await jsonInput(args.todoJson, '--todo-json'));
+  else if (command === 'todo-list') result = await listTodos(args.root, { state: args.todoState });
+  else if (command === 'todo-inspect') result = await inspectTodo(args.root, args.todoId);
+  else if (command === 'todo-claim') result = await claimTodo(args.root, args);
+  else if (command === 'todo-renew') result = await renewTodo(args.root, args);
+  else if (command === 'todo-release') result = await releaseTodo(args.root, args);
+  else if (command === 'todo-handoff') result = await handoffTodo(args.root, args);
+  else if (command === 'todo-accept') result = await decideHandoff(args.root, { ...args, accept: true });
+  else if (command === 'todo-reject') result = await decideHandoff(args.root, { ...args, accept: false });
+  else if (command === 'todo-recover') result = await recoverTodos(args.root, args);
+  else if (command === 'todo-import-legacy') result = await importLegacyTodos(args.root, args);
+  else throw new Error(`Unknown command: ${command}`);
+  console.log(JSON.stringify(result, null, 2));
+  return result === null ? 1 : 0;
+}
+
+async function actionReservationCommand(command, args) {
+  if (!args.idempotencyKey) throw new Error(`${command} requires --idempotency-key.`);
+  let result;
+  if (command === 'action-reserve') {
+    result = await reserveAction(args.root, {
+      idempotencyKey: args.idempotencyKey,
+      kind: args.kind,
+      authorizationScope: args.authorizationScope,
+      request: JSON.parse(args.requestJson ?? '{}')
+    });
+  } else if (command === 'action-inspect') result = await inspectAction(args.root, args.idempotencyKey);
+  else if (command === 'action-claim') result = await claimAction(args.root, { idempotencyKey: args.idempotencyKey, owner: args.owner, leaseMs: args.leaseMs });
+  else if (command === 'action-settle') result = await settleAction(args.root, { idempotencyKey: args.idempotencyKey, fencingToken: args.fencingToken, evidence: args.evidence });
+  else if (command === 'action-release') result = await releaseAction(args.root, { idempotencyKey: args.idempotencyKey, fencingToken: args.fencingToken, reason: args.reason, evidence: args.evidence });
+  else if (command === 'action-reconcile') result = await reconcileAction(args.root, { idempotencyKey: args.idempotencyKey, outcome: args.outcome, evidence: args.evidence });
+  else throw new Error(`Unknown command: ${command}`);
+  console.log(JSON.stringify(result, null, 2));
+  return result === null ? 1 : 0;
 }
 
 main()

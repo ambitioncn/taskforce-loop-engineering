@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loop-engineering.local/schema/todo-v2.json",
+  "title": "Loop Engineering typed todo v2",
+  "type": "object",
+  "required": ["id", "title", "priority", "risk", "authority_class", "required_capabilities", "acceptance_contract", "evidence_requirements", "cost_envelope", "state"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "project_id": { "type": ["string", "null"] },
+    "dependencies": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "priority": { "type": "number" },
+    "risk": { "enum": ["low", "medium", "high", "critical"] },
+    "authority_class": { "type": "string", "minLength": 1 },
+    "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "acceptance_contract": { "type": "object" },
+    "evidence_requirements": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+    "cost_envelope": { "type": "object", "required": ["quota", "amount"], "properties": { "quota": { "type": "string" }, "amount": { "type": "number", "minimum": 0 } } },
+    "state": { "enum": ["runnable", "blocked", "claimed", "handoff_pending", "completed"] },
+    "authorization": {},
+    "idempotency_keys": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "lineage": { "type": "object" },
+    "context": { "type": "object" },
+    "evidence": { "type": "array" },
+    "claim": { "type": ["object", "null"] }
+  },
+  "additionalProperties": true
+}

@@ -1,5 +1,63 @@
 # Taskforce Loop Engineering
 
+## Read-only operator dashboard (P3)
+
+Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or the loopback-only `dashboard-serve`. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.
+
+The consolidated P0-P3 local release contract and evidence ledger are recorded in [docs/release-0.12-acceptance.md](docs/release-0.12-acceptance.md). Publishing, tagging, pushing, and production installation remain separate release actions.
+
+## Action idempotency and reservation
+
+Every side-effecting action must reserve a durable idempotency key before an
+adapter is invoked. The reservation binds a canonical request fingerprint to an
+authorization scope. A worker then atomically claims a lease and receives a
+monotonic fencing token; only that token can settle the action or release its
+reservation. Paid API, notification, and deployment adapters expose the same
+lifecycle from `lib/action-reservations.mjs`.
+
+```bash
+loop-engineering action-reserve --idempotency-key task:step:attempt \
+  --kind paid_api --authorization-scope approval:task:provider \
+  --request-json '{"model":"example","requestDigest":"sha256"}'
+loop-engineering action-claim --idempotency-key task:step:attempt \
+  --owner worker-1 --lease-ms 60000
+loop-engineering action-settle --idempotency-key task:step:attempt \
+  --fencing-token 1 --evidence upstream-request-id
+```
+
+An expired claim becomes `unknown`, not runnable. Operators must inspect and
+reconcile it as `accepted` (durably settle and consume authorization) or
+`not_accepted` (return to reserved) using `action-inspect` and
+`action-reconcile`. This is the crash boundary that prevents blind replay and
+double spend after an upstream acceptance whose local commit was interrupted.
+Terminal records retain settlement or release evidence and an append-only event
+history under `runtime/loops/action-reservations/`.
+
+## Human-Gate Lifecycle v2
+
+Park work without treating an external dependency as failure or repeatedly
+retrying a privileged action:
+
+```bash
+loop-engineering queue-park --queue agent-tasks --task-id <id> \
+  --wait-kind external_condition --reason "SSH banner timed out" \
+  --wait-timeout-ms 86400000 --reminder-interval-ms 3600000 \
+  --escalation-interval-ms 86400000 --max-reminders 3
+
+loop-engineering queue-wait-tick --queue agent-tasks \
+  --notify-command '<source-bound notifier>'
+
+loop-engineering queue-wait-resume --queue agent-tasks --task-id <id> \
+  --verified --recovery-signal 'probe=vps-1;ssh_banner=verified'
+```
+
+`queue-status --json` distinguishes `waiting_for_human`,
+`external_condition_wait`, `timed_out_or_escalated`, and `runnable` state.
+Reminder and escalation sends are throttled and leave durable evidence under
+`runtime/loops/<queue>/wait-notifications/`. Timeout never rejects a task,
+consumes a stored authorization, or repeats an action. Verified resume preserves
+the original task/wait identity and exactly-once execution boundary.
+
 Durable loop engineering for repeated agent work on OpenClaw and Hermes Agent. It provides a small
 Node CLI that executes JSON loop specs, records append-only run artifacts, and
 uses a circuit breaker to escalate repeated failures.
@@ -1270,3 +1328,6 @@ ClawHub:
 ```text
 https://clawhub.ai/ambitioncn/skills/taskforce-loop-engineering
 ```
+# P2 multi-agent control plane
+
+Loop Engineering includes typed executable todos with capability/authority-aware atomic claim, lease and fencing, deterministic dependency/quota scheduling, durable peer handoff, orphan recovery, and P0/P1 safety integration. See [docs/multi-agent-control-plane.md](docs/multi-agent-control-plane.md) for the data contract, CLI, and migration path.

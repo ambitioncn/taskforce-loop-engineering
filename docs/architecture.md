@@ -1,9 +1,30 @@
 # Taskforce Loop Engineering Architecture
 
+## P3 derived operator plane
+
+`lib/operator-dashboard.mjs` is a one-way projection boundary above durable Loop artifacts. It reads P0 gate, P1 reservation, P2 control-plane, queue and project files and emits projection schema v1. It never calls their mutation functions and never serves raw artifacts. Live HTTP and static export share the same projection function, so the UI cannot become a source of truth.
+
 Loop engineering wraps repeated agent work in a small, inspectable cycle:
 
 ```text
 Trigger -> Load state -> Sense -> Choose -> Act/Check -> Verify -> Record -> Stop or schedule next run
+
+## Parked waits and recovery
+
+Human-Gate Lifecycle v2 stores both human-input and external-condition waits in
+the existing `waiting/` queue directory. A v2 task has a `parked` envelope with
+its wait kind, policy, reminder/escalation counters, authorization snapshot,
+recovery proof hash, and exactly-once execution boundary. `queue-wait-tick`
+writes one evidence artifact per notification sequence before another process
+can advance that sequence; repeated or restarted ticks are throttled or observe
+the existing evidence. A timeout parks and escalates—it is not task failure and
+does not authorize action retry.
+
+Recovery is a separate transition. `queue-wait-resume` requires an explicit
+verified signal, hashes the signal into durable state, preserves authorization
+and execution metadata, then atomically writes the task back to `inbox/` before
+removing the waiting copy. Repeating resume after a crash returns
+`already_resumed`, keeping the action boundary exactly once.
 ```
 
 This package implements the conservative foundation of that idea for OpenClaw
@@ -407,3 +428,17 @@ Cadence changes are outcome-driven:
 Queue config can set strategy bounds such as `initialInterval`, `minInterval`,
 `maxInterval`, factors, and jitter. These are guardrails, not a fixed interval;
 the persisted scheduler state owns the live cadence.
+# Action Reservation Contract
+
+Side-effect adapters use a shared durable state machine:
+
+`reserved -> claimed -> settled` or `reserved/claimed -> released`.
+
+A claim whose lease expires transitions to `unknown`; it cannot be claimed
+again until authoritative reconciliation reports `accepted` or `not_accepted`.
+Atomic per-key mutation, monotonic fencing tokens, immutable request and
+authorization fingerprints, and terminal evidence make replay across restart,
+revision, resume, and concurrent workers logically exactly once. Physical
+exactly-once behavior still requires the upstream provider to honor the same
+idempotency key or expose a read-only outcome lookup; absent that, the action
+stays unknown rather than risking a duplicate.

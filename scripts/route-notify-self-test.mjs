@@ -57,6 +57,7 @@ assert.deepEqual(classifyLoopMessage('用 loop engineering 把现有的 growth o
 assert.equal(classifyLoopMessage('Use Loop Engineering to fix this issue.').intent, 'execute');
 assert.equal(classifyLoopMessage('Run this through Loop Engineering.').intent, 'execute');
 assert.equal(classifyLoopMessage('Continue the current loop with this amendment: add English examples.').intent, 'execute');
+assert.equal(classifyLoopMessage('我们继续开发我们的loop engineering').intent, 'execute');
 
 const routed = await routeLoopMessage(root, {
   route: true,
