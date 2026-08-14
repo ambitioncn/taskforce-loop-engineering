@@ -37,6 +37,7 @@ import {
   mergeQueueOptions,
   nextState,
   notifyTerminalTasks,
+  refreshTaskAcceptance,
   notifyHumanInputRequests,
   parkQueueTask,
   resumeParkedTask,
@@ -1637,6 +1638,7 @@ Usage:
   loop-engineering queue-wait-tick --queue name (--notify-command "command" | --dry-run) [--now ISO] [--root <workspace>] [--json]
   loop-engineering queue-wait-resume --queue name --task-id id --verified --recovery-signal "..." [--root <workspace>] [--json]
   loop-engineering queue-terminal-notify --queue name (--notify-command "command" | --dry-run) [--root <workspace>] [--json]
+  loop-engineering queue-acceptance-refresh --queue name --task-id id [--root <workspace>] [--json]
   loop-engineering queue-scheduler-tick --queue name [--config configs/loops/queues/name.json] [--plan-only] [--force-due] [--initial-interval 10m] [--min-interval 1m] [--max-interval 4h] [--jitter 30s] [--no-progress-report] [--progress-report-interval 30m] [--progress-notify-command "command"] [--root <workspace>] [--json]
   loop-engineering queue-init --queue name [--root <workspace>] [--force]
   loop-engineering code-queue-init --queue name [--root <workspace>] [--force]
@@ -2068,6 +2070,14 @@ async function queueTerminalNotifyCommand(args) {
     }
   }
   return result.failed > 0 ? 1 : 0;
+}
+
+async function queueAcceptanceRefreshCommand(args) {
+  if (!args.queue || !args.taskId) throw new Error('queue-acceptance-refresh requires --queue and --task-id.');
+  const result = await refreshTaskAcceptance(args.root, args);
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else console.log(`${result.queue}: ${result.taskId} ${result.outcome}${result.status ? ` (${result.status})` : ''}`);
+  return 0;
 }
 
 async function queueHumanInputNotifyCommand(args) {
@@ -5619,6 +5629,7 @@ async function main() {
   if (command === 'queue-wait-tick') return queueWaitTickCommand(args);
   if (command === 'queue-wait-resume') return queueWaitResumeCommand(args);
   if (command === 'queue-terminal-notify') return queueTerminalNotifyCommand(args);
+  if (command === 'queue-acceptance-refresh') return queueAcceptanceRefreshCommand(args);
   if (command === 'queue-human-input-notify') return queueHumanInputNotifyCommand(args);
   if (command === 'queue-human-input-resolve') return queueHumanInputResolveCommand(args);
   if (command === 'queue-scheduler-tick') return queueSchedulerTickCommand(args);

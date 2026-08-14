@@ -1,5 +1,14 @@
 # Taskforce Loop Engineering
 
+## 0.13 production trust
+
+The local production-trust contract, runtime adapter v1, durable journal,
+multi-worker canary, non-destructive Ironman upgrade planner, safe demo and
+unified acceptance are documented in
+[docs/production-trust-contract.md](docs/production-trust-contract.md). Run
+`npm run check:production-trust`; external publishing and deployment remain
+separately authorized actions.
+
 ## Read-only operator dashboard (P3)
 
 Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or the loopback-only `dashboard-serve`. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.

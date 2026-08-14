@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-08-14
+
+- Add versioned OpenClaw, Hermes, and custom runtime adapter contracts with a shared conformance suite.
+- Add a checksummed, fsync-backed durable journal with replay, snapshots, migration, backup/restore, and fail-closed unknown-outcome handling.
+- Add deterministic multi-worker canary and isolated live-runtime soak tooling, a credential-free demo, and a non-destructive customized-Ironman upgrade planner.
+- Add unified production-trust acceptance and an idempotent acceptance refresh command so detached long-running evidence invalidates stale final judgements.
+
 ## 0.12.0 - 2026-08-13
 
 - Add P3 read-only Operator Dashboard, normalized schema, loopback HTTP/JSON API, static export, inspect and health commands.

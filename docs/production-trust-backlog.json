@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "project": "0.13-production-trust",
+  "terminal_contract": "production-trust-contract.md",
+  "items": [
+    {"id":"PT-1","outcome":"versioned runtime adapter contract","evidence":["lib/runtime-adapter-v1.mjs","scripts/runtime-adapter-contract-self-test.mjs"],"required":true},
+    {"id":"PT-2","outcome":"durable journal, replay, migration, backup/restore","evidence":["lib/durable-journal.mjs","scripts/durable-journal-self-test.mjs"],"required":true},
+    {"id":"PT-3","outcome":"multi-agent soak/canary report","evidence":["scripts/production-soak.mjs"],"required":true},
+    {"id":"PT-4","outcome":"non-destructive customized-layout upgrade plan","evidence":["lib/upgrade-planner.mjs","scripts/upgrade-planner-self-test.mjs"],"required":true},
+    {"id":"PT-5","outcome":"safe public demo and operations guide","evidence":["examples/safe-canary.mjs","docs/production-operations.md"],"required":true},
+    {"id":"PT-6","outcome":"unified local release acceptance","evidence":["scripts/production-acceptance.mjs"],"required":true}
+  ]
+}

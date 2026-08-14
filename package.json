@@ -1,6 +1,6 @@
 {
   "name": "taskforce-loop-engineering",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": false,
   "description": "OpenClaw-native loop engineering CLI, templates, and skill for verifiable agent work loops.",
   "type": "module",
@@ -17,6 +17,7 @@
     "run-loop-cron.sh": "scripts/run-loop-cron.sh"
   },
   "scripts": {
+    "check:production-trust": "node --check lib/runtime-adapter-v1.mjs && node --check lib/durable-journal.mjs && node --check lib/upgrade-planner.mjs && node scripts/production-acceptance.mjs",
     "check:config-drift": "node --check scripts/config-drift-self-test.mjs && node scripts/config-drift-self-test.mjs",
     "check:openclaw-install": "node --check scripts/openclaw-install.mjs && node --check scripts/openclaw-doctor.mjs && node --check scripts/openclaw-smoke.mjs && node --check scripts/openclaw-manage.mjs && node scripts/openclaw-install-self-test.mjs",
     "check:hermes-install": "node --check scripts/hermes-install.mjs && node --check scripts/hermes-doctor.mjs && node --check scripts/hermes-smoke.mjs && node scripts/hermes-install-self-test.mjs",
