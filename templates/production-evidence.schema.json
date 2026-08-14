@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ambitioncn/taskforce-loop-engineering/schemas/production-evidence-v1.json",
+  "title": "Loop Engineering production trust evidence",
+  "type": "object",
+  "required": ["schema", "schema_version", "generated_at", "scenarios", "compatibility", "metrics", "thresholds", "evaluation", "integrity", "passed"],
+  "properties": {
+    "schema": { "const": "loop.production_trust_evidence" },
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "scenarios": { "type": "array", "minItems": 8 },
+    "compatibility": { "type": "array", "minItems": 3 },
+    "metrics": { "type": "object" },
+    "thresholds": { "type": "object" },
+    "evaluation": { "type": "object", "required": ["checks", "trend", "passed"] },
+    "integrity": { "type": "object", "required": ["algorithm", "digest"] },
+    "passed": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

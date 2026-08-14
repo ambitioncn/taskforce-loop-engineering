@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 const commands = [
   ['node', ['scripts/runtime-adapter-contract-self-test.mjs']], ['node', ['scripts/durable-journal-self-test.mjs']],
+  ['node', ['scripts/execution-ledger-self-test.mjs']],
+  ['node', ['scripts/production-evidence-self-test.mjs']],
   ['node', ['scripts/upgrade-planner-self-test.mjs']], ['node', ['scripts/production-soak.mjs']],
   ['node', ['scripts/async-acceptance-refresh-self-test.mjs']], ['node', ['examples/safe-canary.mjs']]
 ];

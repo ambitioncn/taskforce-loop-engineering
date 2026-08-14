@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -23,6 +23,13 @@ const workDir = path.join(tmpdir(), `loop-live-soak-${runId}`);
 await mkdir(workDir, { recursive: true }); await mkdir(path.dirname(output), { recursive: true });
 const startedAt = new Date(); const deadline = startedAt.getTime() + durationMs;
 const report = { version: 1, kind: hermesBin ? 'live-openclaw-hermes-multi-agent-runtime-soak' : 'live-openclaw-multi-session-soak', runId, dryRun, runtimeOnly, startedAt: startedAt.toISOString(), deadlineAt: new Date(deadline).toISOString(), agent, sessions: 3, modelCallsCap: dryRun || runtimeOnly ? 0 : maxCalls, modelCallsAttempted: 0, consecutiveRuntimeErrors: 0, stoppedByCircuitBreaker: false, externalWrites: false, productionProcessesControlled: false, events: [], metrics: { runtimeProbeFailures: 0, heartbeats: 0, claims: 0, handoffs: 0, injectedCrashes: 0, restarts: 0, staleFencesAccepted: 0, duplicateEffects: 0, unknownReconciled: 0 } };
+const statusOutput = `${output}.status.json`;
+const writeStatus = async (state, extra = {}) => {
+  const temporary = `${statusOutput}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ version: 1, state, runId, pid: process.pid, startedAt: report.startedAt, deadlineAt: report.deadlineAt, updatedAt: new Date().toISOString(), modelCallsAttempted: report.modelCallsAttempted, consecutiveRuntimeErrors: report.consecutiveRuntimeErrors, metrics: report.metrics, ...extra }, null, 2)}\n`);
+  await rename(temporary, statusOutput);
+};
+await writeStatus('starting');
 const sanitize = (text) => String(text).replace(/[A-Za-z0-9_=-]{24,}/g, '[redacted]').slice(0, 240);
 const record = (type, fields = {}) => report.events.push({ at: new Date().toISOString(), type, ...fields });
 const invoke = (worker) => new Promise((resolve) => {
@@ -73,14 +80,18 @@ try {
     if (first === second) report.metrics.staleFencesAccepted++;
     startHeartbeat('w1-restarted'); report.metrics.restarts++; record('dedicated_worker_restart', { worker: 'w1-restarted' });
     leases.parked = true; record('parked_gate', { claimRejected: claim('w3', Date.now()) === null }); leases.parked = false;
-    while (Date.now() < deadline && !interruptedSignal) await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, deadline - Date.now())));
+    await writeStatus('running');
+    while (Date.now() < deadline && !interruptedSignal) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, deadline - Date.now())));
+      await writeStatus(interruptedSignal ? 'stopping' : 'running');
+    }
   }
 } finally {
   for (const child of heartbeatChildren.values()) if (!child.killed) child.kill('SIGTERM');
   report.completedAt = new Date().toISOString(); report.durationMs = Date.parse(report.completedAt) - startedAt.getTime();
   report.interruptedSignal = interruptedSignal;
   report.passed = !interruptedSignal && !report.stoppedByCircuitBreaker && report.metrics.runtimeProbeFailures === 0 && report.durationMs >= durationMs && report.metrics.heartbeats > 0 && report.metrics.handoffs === 1 && report.metrics.restarts === 1 && report.metrics.staleFencesAccepted === 0 && report.metrics.duplicateEffects === 0 && report.metrics.unknownReconciled === 1;
-  const temporary = `${output}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`); await import('node:fs/promises').then(({ rename }) => rename(temporary, output)); await rm(workDir, { recursive: true, force: true });
+  const temporary = `${output}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`); await rename(temporary, output); await writeStatus(report.passed ? 'passed' : 'failed', { completedAt: report.completedAt, passed: report.passed, interruptedSignal }); await rm(workDir, { recursive: true, force: true });
 }
 console.log(JSON.stringify({ runId, passed: report.passed, output, durationMs: report.durationMs, modelCallsAttempted: report.modelCallsAttempted }, null, 2));
 if (!report.passed) process.exitCode = 1;

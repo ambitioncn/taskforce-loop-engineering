@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.14.0 - 2026-08-14
+
+- Add the platform-neutral runtime adapter SDK v1 with OpenClaw, Hermes, Codex CLI, and Claude Code factories, shared conformance tests, fail-closed effects, redacted telemetry, migration guidance, and a credential-free demo.
+
 ## 0.13.0 - 2026-08-14
 
 - Add versioned OpenClaw, Hermes, and custom runtime adapter contracts with a shared conformance suite.

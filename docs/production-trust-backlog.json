@@ -1,13 +1,18 @@
 {
-  "version": 1,
-  "project": "0.13-production-trust",
+  "version": 3,
+  "project": "p1-production-trust-evidence",
   "terminal_contract": "production-trust-contract.md",
+  "milestone_completion_is_project_completion": false,
   "items": [
-    {"id":"PT-1","outcome":"versioned runtime adapter contract","evidence":["lib/runtime-adapter-v1.mjs","scripts/runtime-adapter-contract-self-test.mjs"],"required":true},
-    {"id":"PT-2","outcome":"durable journal, replay, migration, backup/restore","evidence":["lib/durable-journal.mjs","scripts/durable-journal-self-test.mjs"],"required":true},
-    {"id":"PT-3","outcome":"multi-agent soak/canary report","evidence":["scripts/production-soak.mjs"],"required":true},
-    {"id":"PT-4","outcome":"non-destructive customized-layout upgrade plan","evidence":["lib/upgrade-planner.mjs","scripts/upgrade-planner-self-test.mjs"],"required":true},
-    {"id":"PT-5","outcome":"safe public demo and operations guide","evidence":["examples/safe-canary.mjs","docs/production-operations.md"],"required":true},
-    {"id":"PT-6","outcome":"unified local release acceptance","evidence":["scripts/production-acceptance.mjs"],"required":true}
+    {"id":"P1-1","outcome":"schema-versioned evidence, public summary, integrity and redaction","evidence":["lib/production-evidence.mjs","templates/production-evidence.schema.json","scripts/production-evidence-self-test.mjs"],"required":true},
+    {"id":"P1-2","outcome":"ledger-backed multi-agent soak and kill/restart chaos","evidence":["scripts/production-soak.mjs","lib/execution-ledger.mjs"],"required":true},
+    {"id":"P1-3","outcome":"claim lease handoff parked gate and stale-fence rejection","evidence":["scripts/production-soak.mjs",".production-evidence/evidence.json"],"required":true},
+    {"id":"P1-4","outcome":"unknown outcome crash boundaries and accepted-before-settle reconciliation","evidence":["scripts/production-soak.mjs","lib/execution-ledger.mjs"],"required":true},
+    {"id":"P1-5","outcome":"step replay resume divergence and zero duplicate effects","evidence":["scripts/production-soak.mjs","scripts/execution-ledger-self-test.mjs"],"required":true},
+    {"id":"P1-6","outcome":"baseline trend threshold attribution recovery cost and error metrics","evidence":["lib/production-evidence.mjs","scripts/production-evidence-self-test.mjs"],"required":true},
+    {"id":"P1-7","outcome":"OpenClaw Hermes and custom adapter compatibility matrix","evidence":["lib/runtime-adapter-v1.mjs","scripts/production-soak.mjs"],"required":true},
+    {"id":"P1-8","outcome":"GitHub CI candidate badge doctor and dashboard projection","evidence":["templates/github-production-trust.yml","README.md","lib/core.mjs","lib/operator-dashboard.mjs"],"required":true},
+    {"id":"P1-9","outcome":"offline determinism privacy and tamper negative tests","evidence":["scripts/production-evidence-self-test.mjs","scripts/production-soak.mjs"],"required":true},
+    {"id":"P1-10","outcome":"full regression package content and clean-install acceptance","evidence":["package.json","scripts/production-acceptance.mjs"],"required":true}
   ]
 }

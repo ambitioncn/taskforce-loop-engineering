@@ -1,5 +1,15 @@
 # Taskforce Loop Engineering
 
+[![production trust](https://github.com/ambitioncn/taskforce-loop-engineering/actions/workflows/production-trust.yml/badge.svg)](https://github.com/ambitioncn/taskforce-loop-engineering/actions/workflows/production-trust.yml)
+
+## Platform-neutral adapter SDK
+
+OpenClaw, Hermes, Codex CLI, and Claude Code share the versioned runtime
+contract in `lib/runtime-adapter-sdk.mjs`. Start without credentials or network
+access with `npm run demo:adapter`, then verify every runtime using
+`npm run check:adapters`. See [docs/runtime-adapter-sdk.md](docs/runtime-adapter-sdk.md)
+for the contract, compatibility matrix, migration, and extension guide.
+
 ## 0.13 production trust
 
 The local production-trust contract, runtime adapter v1, durable journal,
@@ -7,7 +17,11 @@ multi-worker canary, non-destructive Ironman upgrade planner, safe demo and
 unified acceptance are documented in
 [docs/production-trust-contract.md](docs/production-trust-contract.md). Run
 `npm run check:production-trust`; external publishing and deployment remain
-separately authorized actions.
+separately authorized actions. The command writes integrity-sealed evidence and
+a redacted public summary to `.production-evidence/`. The default canary is
+offline and fixture-only: it performs no model call or external side effect.
+Copy `templates/github-production-trust.yml` into `.github/workflows/` only
+when publication is separately approved.
 
 ## Read-only operator dashboard (P3)
 

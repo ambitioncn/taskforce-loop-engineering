@@ -1,54 +1,53 @@
-# Production Trust Contract (0.13)
+# P1 Production-Trust Evidence Terminal Contract
 
-Status: local release candidate. This contract is terminal only when every
-required item in `production-trust-backlog.json` is accepted by recorded local
-evidence. Publishing and production deployment are deliberately outside it.
+Status: local release candidate. Project completion requires every required P1
+backlog item to have repeatable evidence; a scenario or milestone alone is not
+project completion. Push, publication, deployment, production credentials,
+real paid calls, production process control, and external effects are excluded.
 
-## Required outcomes
+## Terminal outcome
 
-1. Runtime adapters implement contract v1 and pass the same conformance suite.
-   OpenClaw and Hermes are supported integrations; the custom adapter is the
-   reference extension point.
-2. State mutations use a checksummed append-only journal with atomic snapshot
-   checkpoints, replay, migration from version-1 JSON state, backup and restore.
-   A committed external P1 side effect is never inferred from local intent:
-   ambiguous attempts remain `unknown` until reconciled with upstream evidence.
-3. The deterministic multi-worker canary covers heartbeat, claim, lease expiry,
-   fenced handoff, crash/restart replay, concurrent claims, quota, parked gates,
-   and unknown-outcome reconciliation and emits an auditable JSON report.
-4. Upgrade planning detects unmanaged or locally modified Ironman layouts and
-   produces a non-destructive plan. Customized dispatcher/config files are
-   preserved; application requires a separate explicit confirmation and has a
-   backup-based rollback plan.
-5. The public demo is credential-free, loopback/local-only, makes no paid call
-   or external write, and labels support boundaries.
-6. Release acceptance includes threat model, reliability/performance thresholds,
-   full regression, package dry-run, and clean-install verification.
+P1 turns the P0 schema-v2 execution ledger and effect protocol into a sustainable
+production-trust evidence system. CI/canary runs emit schema-versioned,
+integrity-sealed evidence plus a secret-redacted public summary. Baselines,
+trends, explicit thresholds, failure attribution, runtime compatibility, cost,
+error rate, and recovery time remain independently reviewable.
 
-## Release thresholds
+## Required acceptance
 
-- Adapter conformance: all three fixtures pass; incompatible major versions fail.
-- Journal: torn tail is ignored, checksum corruption fails closed, snapshot and
-  replay agree, backup restore agrees, migration is idempotent.
-- Canary: all scenarios pass, duplicate settled side effects = 0, stale fencing
-  tokens accepted = 0, unreconciled unknown outcomes = 0.
-- Regression: `npm run check` and `npm run check:production-trust` pass.
-- Packaging: `npm pack --dry-run` contains all contract, runtime and demo assets.
+1. The deterministic multi-agent canary exercises long soak, exclusive claim,
+   lease expiry, kill/restart handoff, stale fencing, parked gate, crash before
+   and after submit, accepted-before-local-settle, reconciliation, checkpoint
+   resume, reusable replay, and replay divergence through the P0 ledger/effect
+   protocol. It does not maintain a second execution state store.
+2. Duplicate settled effects and accepted stale fences are exactly zero;
+   unreconciled unknown outcomes are zero at terminal acceptance. Recovery time,
+   error rate, model calls, and paid-call cost meet recorded thresholds.
+3. OpenClaw, Hermes, and custom runtime-adapter fixtures pass contract v1 using
+   simulated I/O. The boundary is explicit: fixtures prove adapter compatibility,
+   not availability of a real gateway or provider.
+4. Evidence schema v1 supports baselines and metric deltas, threshold failures
+   with attribution, SHA-256 tamper detection, credential-shaped field redaction,
+   and a minimized public summary. Offline reruns require no network or secret.
+5. GitHub CI template/artifact upload and badge markup are release candidates;
+   no workflow is published in this local task. Doctor and dashboard project the
+   latest evidence state without mutating it.
+6. Full regression, package dry-run, package content inspection, and clean local
+   install pass. The packaged candidate includes schema, CI template, library,
+   canary, tests, docs, and backlog.
 
-## Threat model and trust boundaries
+## Real/simulated boundary and deferred canary
 
-Untrusted inputs include adapter responses, task JSON, journal tails, installer
-layouts, and human-gate text. Controls are schema validation, bounded strings,
-checksums, atomic rename, fencing tokens, canonical idempotency keys, path
-containment, fail-closed version negotiation, and explicit confirmation gates.
-The package does not claim Byzantine-worker protection, distributed consensus,
-or exactly-once behavior from an upstream service lacking idempotency/reconcile
-APIs. Host compromise, stolen credentials, and malicious runtime binaries remain
-operator responsibilities.
+`production-soak.mjs` is the authoritative offline CI canary. The separate
+`live-runtime-soak.mjs` may perform runtime probes and is not invoked by release
+acceptance. A real long-duration OpenClaw/Hermes run, production credentials,
+paid inference, or external side effect needs a separate human authorization and
+must produce a successor evidence artifact clearly labeled `real_runtime`.
 
-## Support levels
+## Trust limits
 
-- OpenClaw: supported, contract-tested adapter and managed installer.
-- Hermes: supported, contract-tested adapter and managed installer.
-- Custom runtime: contract/example support; lifecycle is operator-owned.
-- Distributed database/HA: not provided by the local journal backend.
+SHA-256 detects later artifact changes but is not an external timestamp or
+signature. Local filesystem leases provide single-host coordination, not
+distributed consensus or Byzantine-worker protection. Exactly-once effects still
+depend on an upstream idempotency/reconciliation API. Unknown outcomes lacking
+authoritative evidence fail closed and remain reconciliation debt.

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildOperatorProjection, createDashboardServer, dashboardHealth, exportDashboard, filterProjection } from '../lib/operator-dashboard.mjs';
+import { claimStep, markStepUnknown, registerStep } from '../lib/execution-ledger.mjs';
 
 const root = await mkdtemp(path.join(tmpdir(), 'loop-dashboard-'));
 const loops = path.join(root, 'runtime', 'loops');
@@ -11,6 +12,7 @@ await mkdir(path.join(loops, 'action-reservations'), { recursive: true });
 await mkdir(path.join(loops, 'legacy', 'waiting'), { recursive: true });
 await mkdir(path.join(loops, 'legacy', 'active'), { recursive: true });
 await mkdir(path.join(loops, 'projects', 'p3', 'intake'), { recursive: true });
+await mkdir(path.join(root, '.production-evidence'), { recursive: true });
 const now = '2026-08-13T16:00:00.000Z';
 const control = {
   version: 2, updated_at: now, quotas: { credits: 9 }, agents: { a: { id: 'a', capabilities: ['code'], authority_grants: ['local'], provider_token: 'never-show' } },
@@ -25,6 +27,10 @@ await writeFile(path.join(loops, 'action-reservations', 'x.json'), JSON.stringif
 await writeFile(path.join(loops, 'legacy', 'waiting', 'vps.json'), JSON.stringify({ id: 'vps', title: 'VPS down', parked: { kind: 'external_condition', next_check_at: '2026-08-13T17:00:00.000Z' }, provider: 'hidden' }));
 await writeFile(path.join(loops, 'legacy', 'active', 'bad.json'), '{broken');
 await writeFile(path.join(loops, 'projects', 'p3', 'intake', 'latest.json'), JSON.stringify({ version: 1, goal: 'Operator dashboard', token: 'hidden' }));
+await writeFile(path.join(root, '.production-evidence', 'public-summary.json'), JSON.stringify({ schema: 'loop.production_trust_public_summary', schema_version: 1, passed: true, evidence_digest: 'fixture', metrics: { duplicate_settled_effects: 0 } }));
+await registerStep(root, { stepId: 'run:1:effect:send', kind: 'effect', effectKey: 'send:1', input: { api_key: 'hidden', body: 'hello' } });
+const ledgerClaim = await claimStep(root, { stepId: 'run:1:effect:send', owner: 'a' });
+await markStepUnknown(root, { stepId: 'run:1:effect:send', fencingToken: ledgerClaim.fencingToken, reason: 'accepted_before_local_settle' });
 
 const before = await stat(path.join(loops, 'control-plane', 'state.json'));
 const first = await buildOperatorProjection(root, { now });
@@ -35,6 +41,10 @@ assert.equal(before.mtimeMs, after.mtimeMs, 'projection does not mutate source s
 assert.equal(first.todos.find((item) => item.id === 'human').state, 'waiting_for_human');
 assert.equal(first.todos.find((item) => item.id === 'leased').state, 'reconciliation_required');
 assert.equal(first.actions[0].state, 'reconciliation_required');
+assert.equal(first.execution_steps[0].state, 'reconciliation_required');
+assert.equal(first.overview.reconciliation_required_steps, 1);
+assert.equal(first.overview.production_trust, 'passed');
+assert.equal(first.production_evidence.metrics.duplicate_settled_effects, 0);
 assert.equal(first.queues[0].tasks[0].state, 'waiting_for_external_condition');
 assert.equal(first.agents[0].provider_token, '[REDACTED]');
 assert.equal(first.todos[0].gate.secret_input, '[REDACTED]');

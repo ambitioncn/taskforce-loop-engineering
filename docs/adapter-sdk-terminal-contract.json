@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "project": "P2 platform-neutral runtime adapter SDK",
+  "terminal_acceptance": [
+    "versioned platform-neutral contract",
+    "OpenClaw Hermes Codex CLI and Claude Code reproducible paths",
+    "unified capability session run step effect gate continuation telemetry and errors",
+    "compatibility matrix conformance migration and extension docs",
+    "credential-free demo and read-only dashboard path",
+    "redaction fail-closed 0.13 P0 P1 regression package and clean-install evidence"
+  ],
+  "backlog": [
+    {"id":"P2-1","status":"done","evidence":"lib/runtime-adapter-sdk.mjs"},
+    {"id":"P2-2","status":"done","evidence":"scripts/runtime-adapter-conformance.mjs"},
+    {"id":"P2-3","status":"done","evidence":"docs/runtime-adapter-sdk.md"},
+    {"id":"P2-4","status":"done","evidence":"examples/adapter-sdk-demo.mjs"},
+    {"id":"P2-5","status":"done","evidence":"npm run check; npm pack --pack-destination; clean npm install and packaged conformance"}
+  ]
+}

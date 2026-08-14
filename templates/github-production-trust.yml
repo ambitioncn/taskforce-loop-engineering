@@ -1,0 +1,20 @@
+name: production-trust
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  deterministic-canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+        working-directory: packages/loop-engineering
+      - run: npm run check:production-trust
+        working-directory: packages/loop-engineering
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-trust-evidence
+          path: packages/loop-engineering/.production-evidence/
