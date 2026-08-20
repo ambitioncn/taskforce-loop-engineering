@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-08-20
+
+- Reconcile project-scoped human gates against the authoritative project contract and acceptance ledger, superseding stale or optional deferred gates without replay.
+- Strengthen doctor and project status checks for structured gate context, acceptance-ledger drift, execution-ledger reconciliation, and project completion.
+- Make active-task supersession project-aware across active and waiting tasks, and add end-to-end regression coverage for durable gate materialization.
+
 ## 0.14.0 - 2026-08-14
 
 - Add the platform-neutral runtime adapter SDK v1 with OpenClaw, Hermes, Codex CLI, and Claude Code factories, shared conformance tests, fail-closed effects, redacted telemetry, migration guidance, and a credential-free demo.

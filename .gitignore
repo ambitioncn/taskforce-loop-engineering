@@ -1,6 +1,7 @@
 node_modules/
 npm-debug.log*
 runtime/
+.production-evidence/
 logs/
 *.tgz
 .DS_Store

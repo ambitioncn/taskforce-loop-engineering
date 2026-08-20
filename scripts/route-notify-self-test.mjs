@@ -89,6 +89,27 @@ const contract = await readJson(path.join(taskRuntimeDirFor(root, queue, routed.
 assert.equal(contract.risk_level, 'model_assessed');
 assert.equal(contract.requires_human_gate, false);
 
+const largeBodyQueue = 'large-body-smoke';
+const largeBody = `走 loop 验证超长任务正文\n${'checkpoint evidence '.repeat(10_000)}`;
+const largeBodyRouted = await routeLoopMessage(root, {
+  route: true,
+  confirmExecute: true,
+  queue: largeBodyQueue,
+  message: largeBody,
+  sourceChannel: 'feishu',
+  sourceTarget: 'user-1'
+});
+const largeBodyRun = await runQueueOnce(root, {
+  queue: largeBodyQueue,
+  dispatcher: `node -e "const fs=require('fs');const t=JSON.parse(fs.readFileSync(process.env.LOOP_TASK_FILE,'utf8'));if(process.env.LOOP_TASK_BODY!==undefined||process.env.LOOP_TASK_BODY_MODE!=='task_file'||t.body.length<100000)process.exit(7)"`,
+  progressNotifyCommand: '/bin/true',
+  timeoutMs: 10_000,
+  leaseMs: 20_000,
+  staleActiveMs: 60_000
+});
+assert.equal(largeBodyRun.processed, true);
+assert.equal(largeBodyRun.run.dispatch.exitCode, 0);
+
 const orphanQueue = 'orphan-recovery-smoke';
 const orphanRouted = await routeLoopMessage(root, {
   route: true,
@@ -482,6 +503,36 @@ const sent = await notifyTerminalTasks(root, { queue, notifyCommand: '/bin/true'
 assert.equal(sent.sent, 1);
 const repeated = await notifyTerminalTasks(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(repeated.results[0].outcome, 'already_notified');
+
+// Real directory-level regression: terminal history plus the newest project
+// carrier yields exactly one durable gate, one waiting task, and zero replay.
+const regressionRoot = await mkdtemp(path.join(tmpdir(), 'loop-gate-regression-'));
+const regressionQueue = 'project-regression';
+await writeJson(path.join(regressionRoot, 'configs', 'loops', 'projects', 'demo.json'), {
+  schemaVersion: 1, project: 'demo', queues: [{ queue: regressionQueue }],
+  backlog: [{ id: 'R-1', status: 'human_gated', required: true }]
+});
+for (const [id, enqueuedAt] of [['history-done', '2026-01-01T00:00:00Z'], ['latest-done', '2026-01-02T00:00:00Z']]) {
+  await writeJson(path.join(queueSubdirFor(regressionRoot, regressionQueue, 'done'), `${id}.json`), {
+    id, title: `demo ${id}`, body: 'demo R-1', projectId: 'demo', status: 'completed', enqueuedAt,
+    source: { channel: 'test', target: 'owner' }
+  });
+  await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'checkpoints', 'cp1.json'), {
+    version: 1, task_id: id, checkpoint_id: 'cp1', milestone_id: 'R-1', sequence: 1,
+    status: 'ready_for_acceptance', blockers: [], deferred_gates: [{ id: 'R-1', required_authority: 'Approve R-1.' }],
+    verification: [], risks: [], project_completion: 'in_progress', next_action: 'wait'
+  });
+  await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'final_judgement.json'), {
+    version: 1, task_id: id, outcome: 'project_in_progress', coverage: { effective_review_ids: ['cp1'] }
+  });
+}
+const regressionFirst = await notifyHumanInputRequests(regressionRoot, { queue: regressionQueue, notifyCommand: '/bin/true' });
+assert.equal(regressionFirst.sent, 1);
+assert.equal((await queueStatus(regressionRoot, regressionQueue)).waiting, 1);
+assert.equal((await readdir(path.join(queueDirFor(regressionRoot, regressionQueue), 'human-input', 'gates'))).length, 1);
+assert.equal((await readdir(queueSubdirFor(regressionRoot, regressionQueue, 'done'))).length, 1);
+const regressionRepeated = await notifyHumanInputRequests(regressionRoot, { queue: regressionQueue, notifyCommand: '/bin/true' });
+assert.equal(regressionRepeated.sent, 0);
 
 console.log('route/notify self-test passed');
 await import('./config-drift-self-test.mjs');
