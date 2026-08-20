@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.15.1 - 2026-08-20
+
+- Keep generated OpenClaw and Hermes scheduler services healthy when asynchronous human or terminal notification delivery fails, while preserving notification logging and retries.
+
 ## 0.15.0 - 2026-08-20
 
 - Reconcile project-scoped human gates against the authoritative project contract and acceptance ledger, superseding stale or optional deferred gates without replay.

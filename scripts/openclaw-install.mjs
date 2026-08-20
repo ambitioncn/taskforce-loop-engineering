@@ -218,7 +218,7 @@ if (command === 'route') {
   const tickCode = await run(['queue-scheduler-tick', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
-  process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;
+  process.exitCode = tickCode;
 } else {
   console.error(${JSON.stringify(usage)});
   process.exitCode = 1;

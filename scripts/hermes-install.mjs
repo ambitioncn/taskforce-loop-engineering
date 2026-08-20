@@ -116,7 +116,7 @@ if (command === 'route') {
   const tickCode = await run(['queue-scheduler-tick', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/hermes-loop-notify.mjs', ...rest]);
   const humanCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/hermes-loop-notify.mjs']);
   const terminalCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/hermes-loop-notify.mjs']);
-  process.exitCode = tickCode || humanCode || terminalCode;
+  process.exitCode = tickCode;
 } else { console.error(${JSON.stringify(text(language, 'Usage: node scripts/loops/hermes-loop.mjs route|run-once|scheduler-tick', '用法：node scripts/loops/hermes-loop.mjs route|run-once|scheduler-tick'))}); process.exitCode = 1; }
 `;
 }
