@@ -20,11 +20,24 @@ import {
   runQueueOnce,
   runQueueDrain,
   taskRuntimeDirFor,
+  writeDevPlan,
   writeJson
 } from '../lib/core.mjs';
 
 const root = await mkdtemp(path.join(tmpdir(), 'loop-route-notify-'));
 const queue = 'route-smoke';
+
+// Replanning the same durable task must never point a worker at an existing
+// checkpoint file. Historical checkpoint evidence is append-only.
+const checkpointTask = { id: 'checkpoint-sequence' };
+const checkpointContract = { contract: { task_id: checkpointTask.id, risk_level: 'L1', requires_human_gate: false } };
+const checkpointAcceptance = { plan: { functional_checks: [], regression_checks: [], negative_tests: [] } };
+const firstDevPlan = await writeDevPlan(root, queue, checkpointTask, checkpointContract, checkpointAcceptance);
+assert.equal(firstDevPlan.plan.checkpoints[0].id, 'cp1');
+await writeJson(path.join(taskRuntimeDirFor(root, queue, checkpointTask.id), 'checkpoints', 'cp1.json'), { checkpoint_id: 'cp1' });
+const secondDevPlan = await writeDevPlan(root, queue, checkpointTask, checkpointContract, checkpointAcceptance);
+assert.equal(secondDevPlan.plan.checkpoints[0].id, 'cp2');
+assert.equal(secondDevPlan.plan.checkpoint_schema.checkpoint_id, 'cp2');
 
 assert.equal(normalizeGoalDecision({ verdict: 'revise' }).decision, 'change_strategy');
 assert.deepEqual(goalLoopTransition({ decision: 'change_strategy' }, { round: 1, maxRounds: 3 }), {
@@ -495,12 +508,27 @@ assert.deepEqual(await readJson(activeRequeued), activeBefore);
 await rename(activeRequeued, inboxRequeued);
 await writeJson(failedFile, { ...requeuedTask, status: 'needs_human_input' });
 await rm(inboxRequeued, { force: true });
+await writeJson(path.join(taskRuntimeDirFor(root, queue, routed.task.id), 'checkpoints', 'cp-terminal.json'), {
+  version: 1, task_id: routed.task.id, checkpoint_id: 'cp-terminal', sequence: 99,
+  status: 'ready_for_acceptance', summary: 'Terminal summary is visible.', blockers: [],
+  verification: [{ command: 'self-test', result: 'passed' }], risks: [], next_action: 'report'
+});
+await writeJson(finalJudgementFile, {
+  version: 1, task_id: routed.task.id, outcome: 'ready_to_apply', next_actions: ['Report the accepted result.']
+});
 
 const dryRun = await notifyTerminalTasks(root, { queue, dryRun: true });
 assert.match(dryRun.results[0].message, /Loop 任务/);
+assert.match(dryRun.results[0].message, /最终判定：/);
+assert.match(dryRun.results[0].message, /结果：/);
 assert.equal(dryRun.results[0].outcome, 'dry_run');
 const sent = await notifyTerminalTasks(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(sent.sent, 1);
+const notifiedTask = await readJson(path.join(queueSubdirFor(root, queue, 'failed'), path.basename(failedFile)));
+if (notifiedTask.runPath) {
+  const notifiedRun = await readJson(path.join(root, notifiedTask.runPath));
+  assert.equal(notifiedRun.terminalNotification?.outcome, 'sent');
+}
 const repeated = await notifyTerminalTasks(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(repeated.results[0].outcome, 'already_notified');
 
@@ -519,7 +547,7 @@ for (const [id, enqueuedAt] of [['history-done', '2026-01-01T00:00:00Z'], ['late
   });
   await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'checkpoints', 'cp1.json'), {
     version: 1, task_id: id, checkpoint_id: 'cp1', milestone_id: 'R-1', sequence: 1,
-    status: 'ready_for_acceptance', blockers: [], deferred_gates: [{ id: 'R-1', required_authority: 'Approve R-1.' }],
+    status: 'ready_for_acceptance', blockers: [], deferred_gates: [{ id: 'R-1', action: 'approve_requirement', required_authority: 'Approve R-1.' }],
     verification: [], risks: [], project_completion: 'in_progress', next_action: 'wait'
   });
   await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'final_judgement.json'), {

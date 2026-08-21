@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { doctorReport, enqueueTask, notifyHumanInputRequests, projectStatus, queueStatus, reconcileProjectGates, routeLoopMessage, taskRuntimeDirFor } from '../lib/core.mjs';
+import { doctorReport, enqueueTask, notifyHumanInputRequests, projectStatus, queueStatus, reconcileProjectGates, routeLoopMessage, taskRuntimeDirFor, writeTaskContract } from '../lib/core.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'loop-project-gates-'));
 const queue = 'shared';
@@ -12,6 +12,32 @@ const spec = { schemaVersion: 1, project: 'openreel', type: 'code_project', queu
   { id: 'S-01', required: true, status: 'human_gated', dependsOn: [] }
 ] };
 await mkdir(path.dirname(projectFile), { recursive: true });
+await writeFile(projectFile, `${JSON.stringify(spec, null, 2)}\n`);
+
+// A project standing authorization must reach the generated task contract.
+// It authorizes only the configured in-scope production and bounded paid
+// actions; unrelated external, destructive, credential, push and publish
+// actions remain blocked.
+await writeFile(projectFile, `${JSON.stringify({
+  ...spec,
+  actionPolicy: {
+    deploy: 'standing_authorization_openreel_2026-08-19',
+    productionConfig: 'standing_authorization_openreel_2026-08-19',
+    backupRestoreRollbackRehearsal: 'standing_authorization_openreel_2026-08-19',
+    paidActionPerActionCnyLimit: 100,
+    externalWrites: 'human_confirm',
+    destructiveActions: 'human_confirm'
+  }
+}, null, 2)}\n`);
+const authorizedTask = await enqueueTask(root, { queue, title: 'OpenReel production acceptance', task: 'Continue project openreel production acceptance under its action policy', projectId: 'openreel' });
+const authorizedContract = (await writeTaskContract(root, queue, authorizedTask.task)).contract;
+assert.equal(authorizedContract.constraints.project_authorization.project, 'openreel');
+assert.equal(authorizedContract.constraints.project_authorization.production_authorized, true);
+assert.equal(authorizedContract.constraints.project_authorization.paid_action_per_action_cny_limit, 100);
+assert.equal(authorizedContract.constraints.blocked_actions.includes('production_config_change_without_explicit_confirmation'), false);
+assert(authorizedContract.constraints.allowed_actions.includes('in_scope_production_deploy_config_backup_restore_rollback_under_standing_authorization'));
+assert(authorizedContract.constraints.allowed_actions.includes('paid_provider_action_with_existing_credentials_within_per_action_cny_limit'));
+assert(authorizedContract.constraints.blocked_actions.includes('credential_change_without_explicit_confirmation'));
 await writeFile(projectFile, `${JSON.stringify(spec, null, 2)}\n`);
 
 const b = await enqueueTask(root, { queue, title: 'OpenReel B-01', task: 'Project openreel requirement B-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
@@ -85,6 +111,21 @@ assert.equal(deferredGate.authorization_requirements[0].action, 'production_roll
 assert.match(deferredGate.authorization_requirements[0].required_authority, /Owner authorization/);
 assert.equal((await queueStatus(root, queue)).waiting >= 1, true);
 
+// Conditional policy boundaries are not current blockers. Plain prose in
+// deferred_gates must not materialize a gate without a concrete action and
+// authority requirement.
+await reconcileProjectGates(root, { queue });
+const conditional = await enqueueTask(root, { queue, title: 'OpenReel conditional policy boundary', task: 'Continue safe OpenReel backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const conditionalDir = path.join(taskRuntimeDirFor(root, queue, conditional.task.id), 'checkpoints');
+await mkdir(conditionalDir, { recursive: true });
+await writeFile(path.join(conditionalDir, 'cp1.json'), `${JSON.stringify({
+  version: 1, task_id: conditional.task.id, checkpoint_id: 'cp1', status: 'ready_for_acceptance', blockers: [],
+  project_completion: { status: 'in_progress' },
+  deferred_gates: ['Any future paid action above the standing limit requires confirmation.']
+}, null, 2)}\n`);
+const conditionalNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+assert.equal(conditionalNotice.results.some((item) => item.taskId === conditional.task.id), false);
+
 // Once the authoritative project ledger accepts the terminal contract, an
 // optional post-completion deferred action stays in operations backlog and
 // neither creates nor retains a project-queue waiting gate.
@@ -104,4 +145,4 @@ const acceptedNotice = await notifyHumanInputRequests(root, { queue, notifyComma
 assert.equal(acceptedNotice.results.some((item) => item.taskId === acceptedOptional.task.id), false);
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 
-console.log(JSON.stringify({ status: 'ok', assertions: ['structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'accepted project optional deferred gate stays out of queue'] }));
+console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'conditional policy prose does not create a gate', 'accepted project optional deferred gate stays out of queue'] }));

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.15.3 - 2026-08-22
+
+- Remove workspace-specific Ironman queue and dispatcher instructions from the distributed skill.
+- Resolve the installed queue and managed wrapper from each OpenClaw workspace, while keeping existing queue data untouched.
+- Add a distribution self-test that rejects host-specific dispatcher leakage in future packages.
+
+## 0.15.2 - 2026-08-21
+
+- Enrich terminal notifications with final judgement, checkpoint summary, verification count, blockers, and next action.
+- Link successful terminal notification ledgers back into queue run artifacts while preserving idempotent delivery.
+- Materialize only actionable deferred human gates, preserve project standing authorizations in task contracts, and allocate append-only checkpoint identifiers when replanning.
+
 ## 0.15.1 - 2026-08-20
 
 - Keep generated OpenClaw and Hermes scheduler services healthy when asynchronous human or terminal notification delivery fails, while preserving notification logging and retries.

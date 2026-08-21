@@ -127,14 +127,16 @@ Interpret explicit loop language as follows:
 - A new explicit `走 loop` request while another task is active is a correction/replacement, not ordinary backlog. Supersede the active task at a safe boundary, retain its evidence and lineage, then start the replacement after the lock is released.
 - Status, progress, evidence, or failure questions are read-only and must not start another tick unless the user explicitly asks to continue/run.
 
-In this workspace, the default queue is `ironman-task-runner` when no queue is named. Use the installed workspace wrapper when present:
+Do not infer a queue or dispatcher from this skill. Use the integration installed in the current workspace. For OpenClaw, inspect the generated queue configuration under `configs/loops/queues/` and use the managed wrapper when present. A default installation uses queue `agent-tasks` and the generic wrapper below; an operator may choose another queue or worker during installation.
 
 ```bash
-node scripts/loops/ironman-task-runner.mjs route --message "<original user message>" --confirm-execute [source options]
-node scripts/loops/ironman-task-runner.mjs run-once --notify
-node scripts/loops/ironman-task-runner.mjs status --json
-node scripts/loops/ironman-task-runner.mjs peek --json
+node scripts/loops/openclaw-loop.mjs route --message "<original user message>" [source options]
+node scripts/loops/openclaw-loop.mjs run-once
+loop-engineering queue-status --queue <installed-queue> --root . --json
+loop-engineering queue-peek --queue <installed-queue> --root . --json
 ```
+
+If the managed wrapper or queue configuration is absent, stop and run the platform installer/doctor workflow above. Product names, personal agent names, and host-specific dispatchers belong in local workspace instructions, never in this distributed skill.
 
 Pass the original request faithfully. Preserve source channel, target, account, message id, and reply-to metadata so progress, human gates, and terminal results return to the originating conversation. Missing delivery routing must fail closed.
 
