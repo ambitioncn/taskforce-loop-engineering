@@ -11,6 +11,7 @@ import {
   notifyHumanInputRequests,
   notifyTerminalTasks,
   queueHumanDecision,
+  queueRevisionNext,
   queueDirFor,
   queueStatus,
   queueSubdirFor,
@@ -561,6 +562,97 @@ assert.equal((await readdir(path.join(queueDirFor(regressionRoot, regressionQueu
 assert.equal((await readdir(queueSubdirFor(regressionRoot, regressionQueue, 'done'))).length, 1);
 const regressionRepeated = await notifyHumanInputRequests(regressionRoot, { queue: regressionQueue, notifyCommand: '/bin/true' });
 assert.equal(regressionRepeated.sent, 0);
+
+// The newest authoritative project carrier may itself finish blocked. It must
+// become a durable waiting gate instead of being discarded with historical
+// failed attempts.
+const blockedProjectTask = 'latest-blocked';
+await writeJson(path.join(queueSubdirFor(regressionRoot, regressionQueue, 'failed'), `${blockedProjectTask}.json`), {
+  id: blockedProjectTask,
+  title: 'demo latest blocked',
+  body: 'demo R-1',
+  projectId: 'demo',
+  status: 'blocked',
+  enqueuedAt: '2026-01-03T00:00:00Z',
+  source: { channel: 'feishu', target: 'owner' }
+});
+await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, blockedProjectTask), 'checkpoints', 'cp2.json'), {
+  version: 1,
+  task_id: blockedProjectTask,
+  checkpoint_id: 'cp2',
+  milestone_id: 'R-1',
+  sequence: 2,
+  status: 'needs_human_input',
+  blockers: ['Approve the production activation.'],
+  verification: [],
+  risks: [],
+  project_completion: 'in_progress',
+  next_action: 'wait'
+});
+await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, blockedProjectTask), 'final_judgement.json'), {
+  version: 1,
+  task_id: blockedProjectTask,
+  outcome: 'blocked',
+  coverage: { effective_review_ids: ['cp2'] }
+});
+const blockedProjectGate = await notifyHumanInputRequests(regressionRoot, { queue: regressionQueue, notifyCommand: '/bin/true' });
+assert.equal(blockedProjectGate.sent, 1);
+assert.equal((await readJson(path.join(queueSubdirFor(regressionRoot, regressionQueue, 'waiting'), `${blockedProjectTask}.json`))).status, 'waiting_for_human');
+
+// A routed revision must preserve the complete source envelope so a later
+// human gate or terminal result returns to the originating conversation.
+const revisionQueue = 'revision-routing';
+const revisionSource = await routeLoopMessage(root, {
+  route: true,
+  confirmExecute: true,
+  supersedeActive: true,
+  queue: revisionQueue,
+  message: '走 loop fix revision routing',
+  sourceChannel: 'feishu',
+  sourceTarget: 'user-revision',
+  sourceAccount: 'main',
+  sourceMessageId: 'revision-source-message',
+  sourceReplyTo: 'revision-source-reply'
+});
+const revisionSourceFile = path.join(queueSubdirFor(root, revisionQueue, 'inbox'), `${revisionSource.task.id}.json`);
+const revisionFailedFile = path.join(queueSubdirFor(root, revisionQueue, 'failed'), `${revisionSource.task.id}.json`);
+const revisionRequestFile = path.join(taskRuntimeDirFor(root, revisionQueue, revisionSource.task.id), 'revision_request.json');
+const revisionRunFile = path.join(queueSubdirFor(root, revisionQueue, 'runs'), `${revisionSource.task.id}.json`);
+await writeJson(revisionRequestFile, {
+  version: 1,
+  task_id: revisionSource.task.id,
+  status: 'requested',
+  revision_goals: [{ check: 'routing', required_change: 'Preserve source routing.' }],
+  next_checkpoint: { suggested_id: 'cp2' }
+});
+await writeJson(revisionRunFile, {
+  version: 2,
+  taskId: revisionSource.task.id,
+  status: 'failed',
+  finalJudgement: { outcome: 'needs_revision' },
+  revisionRequest: { path: path.relative(root, revisionRequestFile) }
+});
+await writeJson(revisionFailedFile, {
+  ...revisionSource.task,
+  status: 'failed',
+  projectId: 'demo-project',
+  runPath: path.relative(root, revisionRunFile)
+});
+await rm(revisionSourceFile, { force: true });
+const revision = await queueRevisionNext(root, revisionQueue, revisionSource.task.id, {
+  force: true,
+  strategy: 'Preserve the source envelope and verify blocked notification delivery.'
+});
+assert.deepEqual(revision.nextTask.source, revisionSource.task.source);
+assert.equal(revision.nextTask.projectId, 'demo-project');
+
+const unroutable = { ...await readJson(revisionFailedFile) };
+delete unroutable.source;
+await writeJson(revisionFailedFile, unroutable);
+await assert.rejects(
+  queueRevisionNext(root, revisionQueue, revisionSource.task.id, { force: true }),
+  /refusing to create an unroutable revision/
+);
 
 console.log('route/notify self-test passed');
 await import('./config-drift-self-test.mjs');

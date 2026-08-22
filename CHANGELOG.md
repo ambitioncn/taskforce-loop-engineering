@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.4 - 2026-08-22
+
+- Preserve source conversation and project metadata across revision planning, direct revision enqueue, and saved-plan application.
+- Refuse to create an unroutable revision when a routed source task has lost its required channel or target.
+- Materialize a human-input gate for the newest authoritative project carrier when it finishes blocked, while continuing to suppress historical failed-task replay.
+- Add regression coverage for routed revision inheritance and blocked project gate delivery.
+
 ## 0.15.3 - 2026-08-22
 
 - Remove workspace-specific Ironman queue and dispatcher instructions from the distributed skill.
