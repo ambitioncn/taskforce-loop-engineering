@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.5 - 2026-08-24
+
+- Treat embedded-runtime `incomplete_turn` / abandoned-liveness trailers as recoverable interruptions even when the dispatcher wrapper exits zero, preventing partial work from being accepted or stale human gates from being replayed.
+- Keep future paid, deployment, and publication authorization boundaries deferred while an unrelated safe project backlog item remains actionable.
+- Reconcile an already-materialized premature deferred gate by superseding it and restoring the project carrier to the runnable queue.
+- Resolve the authoritative project from checkpoint milestones when a task still carries a broader parent project id.
+
 ## 0.15.4 - 2026-08-22
 
 - Preserve source conversation and project metadata across revision planning, direct revision enqueue, and saved-plan application.

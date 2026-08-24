@@ -48,6 +48,36 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 }
 
 {
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({
+      replayInvalid: true,
+      livenessState: 'abandoned',
+      error: {
+        kind: 'incomplete_turn',
+        message: 'Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.'
+      }
+    }, null, 2)
+  });
+  assert.equal(classification.category, 'incomplete_turn');
+  assert.equal(classification.recoverableRuntime, true);
+  assert.equal(classification.requiresHumanAction, false);
+}
+
+{
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({ livenessState: 'working', completion: { stopReason: 'stop' } })
+  });
+  assert.equal(classification.category, 'ok');
+  assert.equal(classification.recoverableRuntime, undefined);
+}
+
+{
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
   const reviews = { reviews: [{ checkpointId: 'cp38', sequence: 38, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
   const judgement = buildFinalJudgement(

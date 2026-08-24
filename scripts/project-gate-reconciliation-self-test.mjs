@@ -111,6 +111,28 @@ assert.equal(deferredGate.authorization_requirements[0].action, 'production_roll
 assert.match(deferredGate.authorization_requirements[0].required_authority, /Owner authorization/);
 assert.equal((await queueStatus(root, queue)).waiting >= 1, true);
 
+// A future authorization must not stop the project while an unrelated safe
+// backlog item remains actionable.
+await reconcileProjectGates(root, { queue });
+await writeFile(authoritativeBacklog, `${JSON.stringify({
+  status: 'ongoing',
+  items: [
+    { id: 'LOCAL-01', status: 'phase_complete', dependsOn: [] },
+    { id: 'LOCAL-02', status: 'pending', dependsOn: ['LOCAL-01'] }
+  ]
+}, null, 2)}\n`);
+const futureGateTask = await enqueueTask(root, { queue, title: 'OpenReel future production gate', task: 'Continue safe local backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const futureGateDir = path.join(taskRuntimeDirFor(root, queue, futureGateTask.task.id), 'checkpoints');
+await mkdir(futureGateDir, { recursive: true });
+await writeFile(path.join(futureGateDir, 'cp1.json'), `${JSON.stringify({
+  version: 1, task_id: futureGateTask.task.id, checkpoint_id: 'cp1', status: 'ready_for_acceptance', blockers: [],
+  project_completion: { status: 'in_progress' }, next_action: 'Implement LOCAL-02 locally.',
+  deferred_gates: [{ id: 'production-later', action: 'production_deploy', required_authority: 'Owner authorization after local candidate acceptance.' }]
+}, null, 2)}\n`);
+const futureNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+assert.equal(futureNotice.results.some((item) => item.taskId === futureGateTask.task.id), false);
+assert.equal((await queueStatus(root, queue)).waiting, 0);
+
 // Conditional policy boundaries are not current blockers. Plain prose in
 // deferred_gates must not materialize a gate without a concrete action and
 // authority requirement.
@@ -145,4 +167,4 @@ const acceptedNotice = await notifyHumanInputRequests(root, { queue, notifyComma
 assert.equal(acceptedNotice.results.some((item) => item.taskId === acceptedOptional.task.id), false);
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 
-console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'conditional policy prose does not create a gate', 'accepted project optional deferred gate stays out of queue'] }));
+console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'future gate does not stop safe actionable backlog', 'conditional policy prose does not create a gate', 'accepted project optional deferred gate stays out of queue'] }));
