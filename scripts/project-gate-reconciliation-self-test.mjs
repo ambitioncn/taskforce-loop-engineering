@@ -105,6 +105,24 @@ const externalOnly = await projectStatus(root, { project: 'openreel' });
 assert.equal(externalOnly.backlog.file, 'project/backlog.json');
 assert.equal(externalOnly.backlog.count, 1);
 assert.equal(externalOnly.consistency.ok, true);
+
+// When a project deliberately uses its terminal contract as the completion
+// ledger, accepted terminal bytes must project accepted status and suppress
+// optional post-completion authorization gates.
+const terminalContractFile = path.join(root, 'project', 'terminal-contract.json');
+await writeFile(terminalContractFile, `${JSON.stringify({
+  status: 'accepted', terminalState: { accepted: true }, unmet: [], blockers: []
+}, null, 2)}\n`);
+await writeFile(projectFile, `${JSON.stringify({
+  ...spec,
+  backlog: undefined,
+  backlogSource: 'project/backlog.json',
+  acceptanceLedger: undefined,
+  terminalContract: 'project/terminal-contract.json'
+}, null, 2)}\n`);
+const terminalOnly = await projectStatus(root, { project: 'openreel' });
+assert.equal(terminalOnly.projectCompletion, 'accepted');
+assert.equal(terminalOnly.authority.completionSource, 'terminal_contract');
 await writeFile(projectFile, `${JSON.stringify({
   ...spec,
   backlogSource: 'project/backlog.json',
@@ -176,6 +194,23 @@ await writeFile(authoritativeLedger, `${JSON.stringify({ status: 'accepted', unm
 await reconcileProjectGates(root, { queue });
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 assert.equal(JSON.parse(await readFile(path.join(root, deferredResult.ledger), 'utf8')).status, 'superseded');
+const legacyTerminal = await enqueueTask(root, { queue, title: 'Legacy accepted-project gate', task: 'Project openreel terminal bookkeeping', projectId: 'openreel' });
+const legacyCheckpointDir = path.join(taskRuntimeDirFor(root, queue, legacyTerminal.task.id), 'checkpoints');
+await mkdir(legacyCheckpointDir, { recursive: true });
+await writeFile(path.join(legacyCheckpointDir, 'cp-terminal.json'), `${JSON.stringify({ checkpoint_id: 'cp-terminal', status: 'ready_for_acceptance', blockers: [] }, null, 2)}\n`);
+const legacyGateId = `${legacyTerminal.task.id}:cp-terminal`;
+const legacyGateFile = path.join(root, 'runtime', 'loops', queue, 'human-input', 'gates', `${legacyTerminal.task.id}.cp-terminal.json`);
+await writeFile(legacyGateFile, `${JSON.stringify({
+  gate_id: legacyGateId, task_id: legacyTerminal.task.id, checkpoint_id: 'cp-terminal', project_id: 'openreel',
+  requirement_ids: [], contract_hash: 'legacy', gate_kind: 'deferred_authorization', status: 'waiting_for_human'
+}, null, 2)}\n`);
+const legacyInbox = path.join(root, legacyTerminal.file);
+const legacyWaiting = path.join(root, 'runtime', 'loops', queue, 'waiting', path.basename(legacyTerminal.file));
+await writeFile(legacyWaiting, `${JSON.stringify({ ...legacyTerminal.task, status: 'waiting_for_human', waitingGateId: legacyGateId }, null, 2)}\n`);
+await rename(legacyInbox, `${legacyInbox}.moved`);
+await reconcileProjectGates(root, { queue });
+assert.equal((await queueStatus(root, queue)).done >= 1, true, 'accepted project task must close in done, not canceled');
+assert.equal(JSON.parse(await readFile(legacyGateFile, 'utf8')).status, 'superseded');
 const acceptedOptional = await enqueueTask(root, { queue, title: 'OpenReel optional operations transfer', task: 'Project openreel optional post-completion transfer', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
 const acceptedOptionalDir = path.join(taskRuntimeDirFor(root, queue, acceptedOptional.task.id), 'checkpoints');
 await mkdir(acceptedOptionalDir, { recursive: true });

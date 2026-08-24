@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.15.7 - 2026-08-24
+
+- Prevent accepted phase checkpoints from producing `ready_to_apply` when they explicitly mark project completion as `in_progress`, including both string and object completion forms.
+- Preserve unresolved checkpoint risks in the final judgement and treat a concrete continuation action as project work that must continue instead of terminal completion.
+- Use an accepted terminal contract as the authoritative project-completion source when no separate acceptance ledger is configured.
+- Reconcile stale optional post-completion authorization gates into `done` rather than `canceled`, while retaining fail-closed behavior for real blockers.
+- Add regression coverage for premature terminal judgement, terminal-contract status projection, and historical stale-gate reconciliation.
+
 ## 0.15.6 - 2026-08-24
 
 - Allow project configurations to use an external authoritative `backlogSource` without duplicating an embedded backlog registry.

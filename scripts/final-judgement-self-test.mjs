@@ -135,6 +135,34 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 {
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
   const reviews = { reviews: [{
+    checkpointId: 'cp2', milestoneId: 'cp1', sequence: 2, status: 'accepted',
+    projectCompletion: 'in_progress',
+    checkpointRisks: ['Creative/perceptual director scoring is not wired into the production inspector.'],
+    checkpointNextAction: 'wire_director_perceptual_quality_and_quote_cost_without_paid_calls'
+  }] };
+  const judgement = buildFinalJudgement(baseContract, basePlan, devPlan, { count: 2 }, reviews, { dispatchStatus: 'completed' });
+  assert.equal(judgement.outcome, 'project_in_progress');
+  assert.equal(judgement.coverage.explicit_continuations, 1);
+  assert.deepEqual(judgement.residual_risks, ['Creative/perceptual director scoring is not wired into the production inspector.']);
+  assert.match(judgement.reasons.join(' '), /explicitly marks project completion as in_progress/);
+}
+
+{
+  const devPlan = { checkpoints: [{ id: 'cp1' }] };
+  const reviews = { reviews: [{
+    checkpointId: 'cp2', milestoneId: 'cp1', sequence: 2, status: 'accepted',
+    projectCompletion: null,
+    checkpointRisks: ['A required production integration remains incomplete.'],
+    checkpointNextAction: 'implement_remaining_production_integration'
+  }] };
+  const judgement = buildFinalJudgement(baseContract, basePlan, devPlan, { count: 2 }, reviews, { dispatchStatus: 'completed' });
+  assert.equal(judgement.outcome, 'project_in_progress');
+  assert.equal(judgement.coverage.explicit_continuations, 1);
+}
+
+{
+  const devPlan = { checkpoints: [{ id: 'cp1' }] };
+  const reviews = { reviews: [{
     checkpointId: 'cp1', sequence: 1, status: 'accepted',
     projectCompletion: { status: 'in_progress' },
     deferredGates: [{ id: 'deploy', required_authority: 'owner deployment approval' }]
