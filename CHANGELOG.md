@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.6 - 2026-08-24
+
+- Allow project configurations to use an external authoritative `backlogSource` without duplicating an embedded backlog registry.
+- Keep project status fail-closed when neither an embedded backlog nor an external backlog source is configured.
+- Suppress false registry-drift findings when no embedded projection is intentionally present, while retaining drift detection when both representations exist.
+- Add regression coverage for external-only authoritative project backlogs.
+
 ## 0.15.5 - 2026-08-24
 
 - Treat embedded-runtime `incomplete_turn` / abandoned-liveness trailers as recoverable interruptions even when the dispatcher wrapper exits zero, preventing partial work from being accepted or stale human gates from being replayed.

@@ -91,6 +91,27 @@ assert.equal(drifted.authority.acceptanceLedger, 'project/acceptance-ledger.json
 assert.equal(drifted.consistency.ok, false);
 assert(drifted.needsAttention.includes('authoritative_source_drift'));
 
+// A project may keep its authoritative backlog exclusively in backlogSource.
+// Requiring a duplicate embedded backlog makes the two copies drift and used
+// to prevent project-status from reading an otherwise valid project ledger.
+await writeFile(projectFile, `${JSON.stringify({
+  ...spec,
+  backlog: undefined,
+  backlogSource: 'project/backlog.json',
+  acceptanceLedger: 'project/acceptance-ledger.json',
+  terminalContract: 'project/terminal.md'
+}, null, 2)}\n`);
+const externalOnly = await projectStatus(root, { project: 'openreel' });
+assert.equal(externalOnly.backlog.file, 'project/backlog.json');
+assert.equal(externalOnly.backlog.count, 1);
+assert.equal(externalOnly.consistency.ok, true);
+await writeFile(projectFile, `${JSON.stringify({
+  ...spec,
+  backlogSource: 'project/backlog.json',
+  acceptanceLedger: 'project/acceptance-ledger.json',
+  terminalContract: 'project/terminal.md'
+}, null, 2)}\n`);
+
 // A ready milestone with project in progress and a deferred authorization is
 // converted into a structured waiting gate, not left as prose on a done task.
 const deferred = await enqueueTask(root, { queue, title: 'OpenReel deferred S-01', task: 'Project openreel S-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
