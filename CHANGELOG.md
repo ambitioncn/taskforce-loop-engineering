@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.8 - 2026-08-25
+
+- Preserve every non-blocking risk from the effective terminal checkpoint in `final_judgement.residual_risks`, including accepted project completions without a continuation action.
+- Deduplicate repeated terminal risks while retaining the accepted completion outcome.
+- Add regression coverage proving accepted terminal checkpoints keep their operational risks visible.
+
 ## 0.15.7 - 2026-08-24
 
 - Prevent accepted phase checkpoints from producing `ready_to_apply` when they explicitly mark project completion as `in_progress`, including both string and object completion forms.

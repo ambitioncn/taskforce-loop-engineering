@@ -175,7 +175,13 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 
 {
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
-  const reviews = { reviews: [{ checkpointId: 'cp6', sequence: 6, status: 'accepted', projectCompletion: { status: 'accepted' } }] };
+  const reviews = { reviews: [{
+    checkpointId: 'cp6', sequence: 6, status: 'accepted', projectCompletion: { status: 'accepted' },
+    checkpointRisks: [
+      'A non-blocking operational risk remains after acceptance.',
+      'A non-blocking operational risk remains after acceptance.'
+    ]
+  }] };
   const judgement = buildFinalJudgement(
     { ...baseContract, task_scope: 'project' },
     basePlan,
@@ -185,6 +191,7 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
     { dispatchStatus: 'completed' }
   );
   assert.equal(judgement.outcome, 'ready_to_apply');
+  assert.deepEqual(judgement.residual_risks, ['A non-blocking operational risk remains after acceptance.']);
 }
 
 console.log('final judgement self-test passed');
