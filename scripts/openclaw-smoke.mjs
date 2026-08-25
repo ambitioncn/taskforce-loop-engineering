@@ -59,7 +59,8 @@ async function main() {
     config.retry = { ...(config.retry || {}), maxAttempts: 1 };
     await mkdir(path.dirname(smokeConfig), { recursive: true });
     await writeFile(smokeConfig, `${JSON.stringify(config, null, 2)}\n`);
-    const message = '走 loop：Perform a read-only integration smoke. Do not change files or external state. Report SMOKE_OK with verification evidence.';
+    const smokeRuntimeRel = path.relative(args.root, smokeRuntime);
+    const message = `走 loop：Perform a read-only integration smoke. Do not change user or project files, configuration, credentials, or external state. Writing the required Loop checkpoint and verification evidence under ${smokeRuntimeRel}/ is allowed and required; do not write anywhere else. Report SMOKE_OK with verification evidence.`;
     const route = await run(args.loopBin, ['route-message', '--root', args.root, '--queue', smokeQueue, '--message', message, '--route', '--confirm-execute', '--source-channel', 'feishu', '--source-target', 'user:loop-smoke-dry-run', '--source-account', 'doctor', '--source-message-id', `smoke-${runToken}`, '--source-reply-to', `smoke-${runToken}`, '--json'], { cwd: args.root });
     steps.push({ id: 'route', ok: route.code === 0 });
     if (route.code !== 0) throw new Error(`route failed: ${route.stderr || route.stdout}`);

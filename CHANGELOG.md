@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.15.9 - 2026-08-25
+
+- Clarify that the disposable OpenClaw smoke may write required checkpoint and verification artifacts only inside its temporary Loop runtime queue while user/project files, configuration, credentials, and external state remain read-only.
+- Add regression coverage that rejects contradictory smoke permission wording or a missing checkpoint requirement.
+
 ## 0.15.8 - 2026-08-25
 
 - Preserve every non-blocking risk from the effective terminal checkpoint in `final_judgement.residual_risks`, including accepted project completions without a continuation action.

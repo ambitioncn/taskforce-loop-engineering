@@ -128,6 +128,13 @@ if (doctorResult.code !== 0) throw new Error(`doctor failed: ${doctorResult.stde
 const doctorReport = JSON.parse(doctorResult.stdout);
 if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok)) throw new Error('doctor did not complete a safe notification dry-run');
 const smoke = new URL('./openclaw-smoke.mjs', import.meta.url).pathname;
+const smokeSource = await readFile(smoke, 'utf8');
+if (!smokeSource.includes('Do not change user or project files, configuration, credentials, or external state.')
+  || !smokeSource.includes('Writing the required Loop checkpoint and verification evidence under')
+  || !smokeSource.includes('is allowed and required; do not write anywhere else.')
+  || !smokeSource.includes('path.relative(args.root, smokeRuntime)')) {
+  throw new Error('OpenClaw smoke permission boundary or checkpoint requirement is missing');
+}
 const loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
 const smokeResult = await new Promise((resolve) => {
   const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
