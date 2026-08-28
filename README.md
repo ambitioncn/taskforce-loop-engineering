@@ -1,5 +1,19 @@
 # Taskforce Loop Engineering
 
+## Primary Goal interface
+
+The ordinary public surface is `init`, `run`, `status`, `review`, and `doctor`:
+
+```sh
+loop-engineering init --id demo --goal "Deliver the complete verified result"
+loop-engineering run --id demo
+loop-engineering status --id demo
+loop-engineering review --id demo --decision revise --reason "change strategy"
+loop-engineering doctor --id demo
+```
+
+Node.js callers can use `Goal.init/run/status/review/doctor`. Existing queue, project, revision, human-gate, reservation, dashboard, and worktree commands remain supported as advanced commands. See [the transactional kernel and migration guide](docs/transactional-kernel-and-goal-api.md).
+
 [![production trust](https://github.com/ambitioncn/taskforce-loop-engineering/actions/workflows/production-trust.yml/badge.svg)](https://github.com/ambitioncn/taskforce-loop-engineering/actions/workflows/production-trust.yml)
 
 ## Platform-neutral adapter SDK

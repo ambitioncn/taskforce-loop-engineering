@@ -100,6 +100,7 @@ import {
   exportDashboard,
   filterProjection
 } from '../lib/operator-dashboard.mjs';
+import { doctorGoal, initGoal, reviewGoal, runGoal, statusGoal } from '../lib/goal-api.mjs';
 
 function parseArgs(argv) {
   const args = { _: [], root: process.cwd(), json: false, force: false };
@@ -1605,9 +1606,16 @@ async function writeRevisionDriftAllowTemplateOutput(root, template, output, opt
   return { file: path.relative(root, outputFile), format: 'json' };
 }
 
-const HELP = `loop-engineering - verifiable agent work loops
+const HELP = `loop-engineering - durable Goal loops
 
 Usage:
+  loop-engineering init --id goal-id --goal "Terminal goal" [--root <workspace>] [--json]
+  loop-engineering run --id goal-id [--root <workspace>] [--json]
+  loop-engineering status --id goal-id [--root <workspace>] [--json]
+  loop-engineering review --id goal-id --decision accept|revise|wait [--reason text] [--root <workspace>] [--json]
+  loop-engineering doctor [--id goal-id] [--root <workspace>] [--json]
+
+Advanced compatibility commands:
   loop-engineering init [--root <workspace>] [--force]
   loop-engineering run --config configs/loops/name.json [--root <workspace>] [--json]
   loop-engineering verify [--config configs/loops/name.json] [--root <workspace>]
@@ -1694,6 +1702,11 @@ Exit codes:
   1 invalid spec, command error outside a check, or runtime failure`;
 
 async function runCommand(args) {
+  if (args.id && !args.config) {
+    const result = await runGoal(args.root, args.id, { triggerId: args.sourceMessageId ?? 'manual' });
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
   if (!args.config) throw new Error('run requires --config.');
   const root = args.root;
   const { spec, file: specPath } = await loadSpec(root, args.config);
@@ -1787,6 +1800,10 @@ async function verifyCommand(args) {
 }
 
 async function statusCommand(args) {
+  if (args.id && !args.config) {
+    console.log(JSON.stringify(await statusGoal(args.root, args.id), null, 2));
+    return 0;
+  }
   const files = await configFilesFromArgs(args.root, args.config ? ['--config', args.config] : []);
   if (files.length === 0) throw new Error('No loop configs found.');
   const reports = [];
@@ -1854,6 +1871,11 @@ async function summarizeCommand(args) {
 }
 
 async function doctorCommand(args) {
+  if (args.id) {
+    const report = await doctorGoal(args.root, args.id);
+    console.log(JSON.stringify(report, null, 2));
+    return report.ok ? 0 : 1;
+  }
   const report = await doctorReport(args.root, { limit: args.limit ?? 10 });
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));
@@ -1897,9 +1919,25 @@ async function repairPlanCommand(args) {
 }
 
 async function initCommand(args) {
+  if (args.id || args.goal) {
+    if (!args.id || !args.goal) throw new Error('Goal init requires both --id and --goal.');
+    console.log(JSON.stringify(await initGoal(args.root, { id: args.id, goal: args.goal }), null, 2));
+    return 0;
+  }
   const config = await initWorkspace(args.root, { force: args.force });
   console.log(`initialized loop engineering at ${args.root}`);
   console.log(`config: ${config}`);
+  return 0;
+}
+
+async function reviewCommand(args) {
+  if (!args.id) throw new Error('review requires --id.');
+  const result = await reviewGoal(args.root, args.id, {
+    decision: args.decision,
+    reason: args.reason ?? args.comment ?? '',
+    revision: args.revision ?? 0
+  });
+  console.log(JSON.stringify(result, null, 2));
   return 0;
 }
 
@@ -5611,6 +5649,7 @@ async function main() {
   if (command === 'run') return runCommand(args);
   if (command === 'verify') return verifyCommand(args);
   if (command === 'status') return statusCommand(args);
+  if (command === 'review') return reviewCommand(args);
   if (command === 'summarize') return summarizeCommand(args);
   if (command === 'doctor') return doctorCommand(args);
   if (command.startsWith('dashboard-')) return dashboardCommand(command, args);

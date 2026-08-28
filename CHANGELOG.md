@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.11 - 2026-08-28
+
+- Add a transactional state kernel with typed effects, receipt chaining, CAS/fencing, exact-effect replay, crash recovery, and completion fencing.
+- Add the public Goal API and five-command primary CLI while preserving advanced commands.
+- Add public CI and seven competitive acceptance fixtures.
+
 ## 0.15.10 - 2026-08-28
 
 - Materialize human-input gates only for permissions or external conditions that are explicitly missing and needed now; preserve authorized, consumed, future, and conditional boundaries as audit context instead of repeatedly blocking project progress.

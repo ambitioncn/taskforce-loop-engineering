@@ -1,5 +1,9 @@
 # Migrating to Taskforce Loop Engineering 0.12.0
 
+## Goal API and primary CLI
+
+The five-command Goal interface is additive. Existing advanced commands and artifact formats are not removed or automatically rewritten. New integrations should prefer `init/run/status/review/doctor --id`; existing integrations may migrate incrementally. See `docs/transactional-kernel-and-goal-api.md`.
+
 ## Operator projection
 
 No runtime artifact migration is required. P3 reads P0/P1/P2 and legacy queue/project artifacts in place and emits projection schema `1.0.0`; existing writers remain authoritative. Consumers should use `schema_version`, tolerate additive fields, and treat degraded health as a refresh/investigation signal. `dashboard-serve` is loopback-only unless `--allow-non-loopback` is explicit.
