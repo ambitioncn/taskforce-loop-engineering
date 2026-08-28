@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.10 - 2026-08-28
+
+- Materialize human-input gates only for permissions or external conditions that are explicitly missing and needed now; preserve authorized, consumed, future, and conditional boundaries as audit context instead of repeatedly blocking project progress.
+- Honor project standing authorization for in-scope production backup, deploy, restart, readiness, restore, and rollback work while keeping publication, credential, destructive, and other excluded actions gated.
+- Resolve checkpoint-bound subproject backlogs when deciding whether safe project work remains, with regression coverage for current blockers, dormant gates, and publication boundaries.
+
 ## 0.15.9 - 2026-08-25
 
 - Clarify that the disposable OpenClaw smoke may write required checkpoint and verification artifacts only inside its temporary Loop runtime queue while user/project files, configuration, credentials, and external state remain read-only.

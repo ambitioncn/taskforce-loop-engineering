@@ -548,7 +548,10 @@ for (const [id, enqueuedAt] of [['history-done', '2026-01-01T00:00:00Z'], ['late
   });
   await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'checkpoints', 'cp1.json'), {
     version: 1, task_id: id, checkpoint_id: 'cp1', milestone_id: 'R-1', sequence: 1,
-    status: 'ready_for_acceptance', blockers: [], deferred_gates: [{ id: 'R-1', action: 'approve_requirement', required_authority: 'Approve R-1.' }],
+    status: 'ready_for_acceptance', blockers: [], deferred_gates: [{
+      id: 'R-1', action: 'approve_requirement', required_authority: 'Approve R-1.',
+      authorization_state: 'missing', needed_when: 'now', materialize: true
+    }],
     verification: [], risks: [], project_completion: 'in_progress', next_action: 'wait'
   });
   await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'final_judgement.json'), {
