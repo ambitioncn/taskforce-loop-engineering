@@ -12,6 +12,10 @@ await mkdir(path.join(loops, 'action-reservations'), { recursive: true });
 await mkdir(path.join(loops, 'legacy', 'waiting'), { recursive: true });
 await mkdir(path.join(loops, 'legacy', 'active'), { recursive: true });
 await mkdir(path.join(loops, 'projects', 'p3', 'intake'), { recursive: true });
+await mkdir(path.join(loops, 'projects', 'p3', 'backlog'), { recursive: true });
+await mkdir(path.join(loops, 'projects', 'p3', 'completion'), { recursive: true });
+await mkdir(path.join(loops, 'legacy', 'tasks', 'task-project', 'checkpoints'), { recursive: true });
+await mkdir(path.join(loops, 'legacy', 'tasks', 'task-project', 'reviews'), { recursive: true });
 await mkdir(path.join(root, '.production-evidence'), { recursive: true });
 const now = '2026-08-13T16:00:00.000Z';
 const control = {
@@ -27,6 +31,13 @@ await writeFile(path.join(loops, 'action-reservations', 'x.json'), JSON.stringif
 await writeFile(path.join(loops, 'legacy', 'waiting', 'vps.json'), JSON.stringify({ id: 'vps', title: 'VPS down', parked: { kind: 'external_condition', next_check_at: '2026-08-13T17:00:00.000Z' }, provider: 'hidden' }));
 await writeFile(path.join(loops, 'legacy', 'active', 'bad.json'), '{broken');
 await writeFile(path.join(loops, 'projects', 'p3', 'intake', 'latest.json'), JSON.stringify({ version: 1, goal: 'Operator dashboard', token: 'hidden' }));
+await writeFile(path.join(loops, 'projects', 'p3', 'backlog', 'initial.json'), JSON.stringify({ tasks: [{ id: 'm1', title: 'Projection foundation', status: 'completed' }, { id: 'm2', title: 'Interaction polish', status: 'pending' }] }));
+await writeFile(path.join(loops, 'projects', 'p3', 'terminal-contract.json'), JSON.stringify({ status: 'active', terminalState: { accepted: false, userVisibleOutcome: 'Daily browser workspace' }, milestoneRule: 'A milestone is not project completion.', completionRule: 'All requirements and final judge must pass.', requirements: [{ id: 'workspace', status: 'active' }] }));
+await writeFile(path.join(loops, 'projects', 'p3', 'completion', 'latest.json'), JSON.stringify({ status: 'active', terminalAccepted: false, unmet: ['interaction polish'] }));
+await writeFile(path.join(loops, 'legacy', 'tasks', 'task-project', 'task_contract.json'), JSON.stringify({ title: 'Project foundation', task_scope: 'project' }));
+await writeFile(path.join(loops, 'legacy', 'tasks', 'task-project', 'checkpoints', 'cp1.json'), JSON.stringify({ checkpoint_id: 'cp1', milestone_id: 'm1', project_id: 'p3', status: 'ready_for_acceptance', summary: 'Foundation ready', amendment_version: 2, created_at: now }));
+await writeFile(path.join(loops, 'legacy', 'tasks', 'task-project', 'reviews', 'cp1.json'), JSON.stringify({ checkpoint_id: 'cp1', status: 'accepted', passed: 'projection complete', created_at: now }));
+await writeFile(path.join(loops, 'legacy', 'tasks', 'task-project', 'final_judgement.json'), JSON.stringify({ outcome: 'project_in_progress', reasons: ['Milestone accepted; terminal contract remains open.'], created_at: now }));
 await writeFile(path.join(root, '.production-evidence', 'public-summary.json'), JSON.stringify({ schema: 'loop.production_trust_public_summary', schema_version: 1, passed: true, evidence_digest: 'fixture', metrics: { duplicate_settled_effects: 0 } }));
 await registerStep(root, { stepId: 'run:1:effect:send', kind: 'effect', effectKey: 'send:1', input: { api_key: 'hidden', body: 'hello' } });
 const ledgerClaim = await claimStep(root, { stepId: 'run:1:effect:send', owner: 'a' });
@@ -44,6 +55,11 @@ assert.equal(first.actions[0].state, 'reconciliation_required');
 assert.equal(first.execution_steps[0].state, 'reconciliation_required');
 assert.equal(first.overview.reconciliation_required_steps, 1);
 assert.equal(first.overview.production_trust, 'passed');
+assert.equal(first.overview.task_workspace_count, 1);
+assert.equal(first.projects[0].terminal_accepted, false);
+assert.equal(first.projects[0].project_summary.completed_milestones, 1);
+assert.equal(first.projects[0].tasks[0].timeline.at(-1).type, 'final_judge');
+assert.equal(first.projects[0].tasks[0].revision_lineage[0].milestone_id, 'm1');
 assert.equal(first.production_evidence.metrics.duplicate_settled_effects, 0);
 assert.equal(first.queues[0].tasks[0].state, 'waiting_for_external_condition');
 assert.equal(first.agents[0].provider_token, '[REDACTED]');
@@ -68,6 +84,15 @@ try {
   const detail = await fetch(`${base}/api/v1/todos/human`).then((response) => response.json());
   assert.match(detail.title, /onerror/);
   const page = await fetch(base).then((response) => response.text());
+  assert.match(page, /aria-live="polite"/);
+  assert.match(page, /aria-pressed/);
+  assert.match(page, /history\.replaceState/);
+  assert.match(page, /No matching operational work/);
+  assert.match(page, /Unable to load workspace/);
+  assert.match(page, /Gates & reservations/);
+  assert.doesNotMatch(page, /approve|confirm-send|settle reservation/i);
+  const project = await fetch(`${base}/api/v1/projects/p3`).then((response) => response.json());
+  assert.equal(project.terminal_contract.milestone_rule, 'A milestone is not project completion.');
   assert.doesNotMatch(page, /<img src=x/);
   assert.equal((await fetch(`${base}/api/v1/todos/%2e%2e%2fsecret`)).status, 400);
   assert.equal((await fetch(`${base}/api/v1/unknown`)).status, 404);
@@ -81,4 +106,4 @@ const started = performance.now(); const large = await buildOperatorProjection(r
 assert.equal(large.queues.find((queue) => queue.id === 'large').tasks.length, 500);
 assert.ok(performance.now() - started < 5000, '500 task projection should finish under 5 seconds');
 
-console.log(JSON.stringify({ status: 'ok', assertions: 'empty-compatible, legacy, malformed, deterministic, read-only, P0 gates, P1 reconciliation, P2 lease/handoff, redaction, XSS, traversal, bind safety, export, restart-safe server, large queue performance' }));
+console.log(JSON.stringify({ status: 'ok', assertions: 'empty-compatible, legacy, malformed, deterministic, read-only, project terminal/milestone split, revision and final-judge timeline, persistent URL state, keyboard and live-region accessibility, empty/error states, responsive UI, P0 gates, P1 reconciliation, P2 lease/handoff, redaction, XSS, traversal, bind safety, export, restart-safe server, large queue performance' }));

@@ -39,7 +39,7 @@ when publication is separately approved.
 
 ## Read-only operator dashboard (P3)
 
-Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or the loopback-only `dashboard-serve`. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.
+Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or `dashboard-serve`. Gateway autostart installation supports local-only and Tailnet-only listening without binding all interfaces. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.
 
 The consolidated P0-P3 local release contract and evidence ledger are recorded in [docs/release-0.12-acceptance.md](docs/release-0.12-acceptance.md). Publishing, tagging, pushing, and production installation remain separate release actions.
 

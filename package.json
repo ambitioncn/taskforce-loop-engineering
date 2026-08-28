@@ -1,6 +1,6 @@
 {
   "name": "taskforce-loop-engineering",
-  "version": "0.15.12",
+  "version": "0.15.13",
   "private": false,
   "description": "OpenClaw-native loop engineering CLI, templates, and skill for verifiable agent work loops.",
   "type": "module",
@@ -14,10 +14,12 @@
     "loop-engineering-hermes-install": "scripts/hermes-install.mjs",
     "loop-engineering-hermes-doctor": "scripts/hermes-doctor.mjs",
     "loop-engineering-hermes-smoke": "scripts/hermes-smoke.mjs",
+    "loop-engineering-dashboard-autostart-install": "scripts/dashboard-autostart-install.mjs",
     "run-loop-cron.sh": "scripts/run-loop-cron.sh"
   },
   "scripts": {
-    "test": "npm run check && npm run check:competitive",
+    "test": "npm run check && npm run check:competitive && npm run check:operator-workspace",
+    "check:operator-workspace": "node --check scripts/operator-workspace-final-judgement.mjs && node --check scripts/dashboard-autostart-install.mjs && node scripts/dashboard-autostart-self-test.mjs && node scripts/operator-workspace-final-judgement.mjs",
     "check:competitive": "node --check lib/transactional-state-kernel.mjs && node --check lib/goal-api.mjs && node scripts/competitive-acceptance.mjs",
     "check:adapters": "node --check lib/runtime-adapter-sdk.mjs && node scripts/runtime-adapter-conformance.mjs",
     "demo:adapter": "node examples/adapter-sdk-demo.mjs",

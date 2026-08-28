@@ -46,7 +46,7 @@ function run(args, env = process.env) {
 const installBase = ['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--systemctl-bin', mockSystemctl];
 const plan = await run([...installBase, '--json']);
 const planReport = JSON.parse(plan.stdout);
-if (plan.code !== 0 || planReport.language !== 'en' || planReport.status !== 'plan_only' || planReport.platform !== 'openclaw' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent || planReport.confirmationSummary?.targetPlatform !== 'OpenClaw' || planReport.confirmationSummary?.writesEnabled !== false || !path.isAbsolute(planReport.confirmationSummary?.platformCli || '') || !planReport.confirmationSummary?.notificationTarget.includes('OpenClaw')) throw new Error(`plan failed: ${plan.stderr}`);
+if (plan.code !== 0 || planReport.language !== 'en' || planReport.status !== 'plan_only' || planReport.platform !== 'openclaw' || planReport.workerAgent !== 'builder' || planReport.workerSelection !== 'only_available' || !planReport.workerValidated || planReport.createsWorkerAgent || planReport.confirmationSummary?.targetPlatform !== 'OpenClaw' || planReport.confirmationSummary?.writesEnabled !== false || !path.isAbsolute(planReport.confirmationSummary?.platformCli || '') || !planReport.confirmationSummary?.notificationTarget.includes('OpenClaw') || planReport.dashboardAutostart?.gateway !== 'openclaw-gateway.service') throw new Error(`plan failed: ${plan.stderr}`);
 const zhPlan = await run([...installBase, '--language', 'zh']);
 if (zhPlan.code !== 0 || !zhPlan.stdout.includes('安装确认') || !zhPlan.stdout.includes('目标平台：OpenClaw') || !zhPlan.stdout.includes('允许写入：否（仅生成计划）')) throw new Error('explicit Chinese installation summary missing');
 const autoZhPlan = await run([...installBase, '--json'], { ...process.env, LC_ALL: 'zh_CN.UTF-8', LANG: 'C' });
@@ -79,9 +79,12 @@ const missingSourceRoute = await new Promise((resolve) => {
 if (missingSourceRoute.code !== 2 || !missingSourceRoute.stderr.includes('requires conversation metadata')) throw new Error('installed wrapper did not fail closed without source routing');
 const serviceFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.service');
 const timerFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-loop-test-tasks-scheduler.timer');
+const dashboardServiceFile = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/loop-engineering-dashboard.service');
+const dashboardDropIn = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-gateway.service.d/loop-engineering-dashboard.conf');
 const service = await readFile(serviceFile, 'utf8');
 const timer = await readFile(timerFile, 'utf8');
 if (!service.includes('scheduler-tick') || !timer.includes('OnUnitActiveSec=1min')) throw new Error('scheduler systemd units were not installed');
+if (!(await readFile(dashboardServiceFile, 'utf8')).includes('dashboard-serve') || !(await readFile(dashboardDropIn, 'utf8')).includes('Wants=loop-engineering-dashboard.service')) throw new Error('OpenClaw installer did not install Dashboard gateway autostart');
 if (service.includes('WorkingDirectory="') || service.includes('ExecStart="') || !service.includes('\\x20') || !service.includes('\\xe5\\xae\\x89\\xe8\\xa3\\x85')) throw new Error('scheduler service paths were not encoded with systemd path escapes');
 const systemdVerify = await new Promise((resolve) => {
   const child = spawn('systemd-analyze', ['verify', serviceFile, timerFile], { stdio: ['ignore', 'pipe', 'pipe'] });

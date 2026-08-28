@@ -14,7 +14,8 @@ async function present(file) { try { await access(file); return true; } catch { 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log('Usage: loop-engineering-hermes-doctor [--root workspace] [--queue agent-tasks] [--hermes-bin hermes] [--json]'); return; }
-  const required = [`configs/loops/queues/${args.queue}.json`, 'configs/loops/workspace-health.json', 'scripts/loops/hermes-loop-dispatch.mjs', 'scripts/loops/hermes-loop.mjs', 'scripts/loops/hermes-loop-notify.mjs', 'runtime/loop-engineering-hermes-install.json', 'AGENTS.md'];
+  const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
+  const required = [`configs/loops/queues/${args.queue}.json`, 'configs/loops/workspace-health.json', 'scripts/loops/hermes-loop-dispatch.mjs', 'scripts/loops/hermes-loop.mjs', 'scripts/loops/hermes-loop-notify.mjs', 'runtime/loop-engineering-hermes-install.json', 'AGENTS.md', path.relative(args.root, path.join(systemdUserDir, 'loop-engineering-dashboard.service')), path.relative(args.root, path.join(systemdUserDir, 'hermes-gateway.service.d', 'loop-engineering-dashboard.conf'))];
   const checks = []; for (const relative of required) checks.push({ id: `file:${relative}`, ok: await present(path.join(args.root, relative)) });
   const cli = await run(args.hermesBin, ['--version'], { cwd: args.root }); checks.push({ id: 'hermes_cli', ok: cli.code === 0, detail: (cli.stdout || cli.stderr).trim().slice(0, 300) });
   const sendHelp = await run(args.hermesBin, ['send', '--help'], { cwd: args.root }); checks.push({ id: 'hermes_send', ok: sendHelp.code === 0, detail: (sendHelp.stdout || sendHelp.stderr).trim().slice(0, 300) });

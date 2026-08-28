@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.13 - 2026-08-28
+
+- Add the project-first read-only operator workspace with terminal contracts, milestone/project status separation, revision lineage, human gates, external-action reservations, and acceptance/final-judge timelines.
+- Couple the Dashboard service to OpenClaw and Hermes gateway startup and verify the wiring in platform doctors and installer self-tests.
+- Support fail-closed `localhost` and Tailnet-only Dashboard listening modes without binding all network interfaces.
+
 ## 0.15.12 - 2026-08-28
 
 - Fix public CI setup on repositories that intentionally do not commit an npm lockfile.

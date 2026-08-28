@@ -5,13 +5,15 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 function parseArgs(argv) {
-  const out = { root: process.cwd(), queue: 'agent-tasks', hermesBin: 'hermes', systemctlBin: 'systemctl', language: 'auto', json: false, confirmInstall: false, force: false };
+  const out = { root: process.cwd(), queue: 'agent-tasks', hermesBin: 'hermes', systemctlBin: 'systemctl', dashboardListen: 'localhost', tailscaleBin: 'tailscale', language: 'auto', json: false, confirmInstall: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--root') out.root = path.resolve(argv[++i]);
     else if (arg === '--queue') out.queue = argv[++i];
     else if (arg === '--hermes-bin') out.hermesBin = argv[++i];
     else if (arg === '--systemctl-bin') out.systemctlBin = argv[++i];
+    else if (arg === '--dashboard-listen') out.dashboardListen = argv[++i];
+    else if (arg === '--tailscale-bin') out.tailscaleBin = argv[++i];
     else if (arg === '--language') out.language = argv[++i];
     else if (arg === '--confirm-install') out.confirmInstall = true;
     else if (arg === '--force') out.force = true;
@@ -19,6 +21,7 @@ function parseArgs(argv) {
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
+  if (!['localhost', 'tailscale'].includes(out.dashboardListen)) throw new Error('--dashboard-listen must be localhost or tailscale.');
   return out;
 }
 
@@ -145,7 +148,7 @@ function instructionsBlock({ queue, language }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   args.language = resolveLanguage(args.language);
-  if (args.help) { console.log('Usage: loop-engineering-hermes-install [--root workspace] [--queue agent-tasks] [--language auto|en|zh] [--hermes-bin hermes] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]'); return; }
+  if (args.help) { console.log('Usage: loop-engineering-hermes-install [--root workspace] [--queue agent-tasks] [--dashboard-listen localhost|tailscale] [--tailscale-bin tailscale] [--language auto|en|zh] [--hermes-bin hermes] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]'); return; }
   safeId(args.queue, 'queue');
   args.hermesBin = await resolveExecutable(args.hermesBin);
   const hermes = await run(args.hermesBin, ['--version'], { cwd: args.root });
@@ -155,8 +158,9 @@ async function main() {
   const unit = `hermes-loop-${args.queue}-scheduler.service`; const timer = `hermes-loop-${args.queue}-scheduler.timer`;
   const files = { workspaceHealth: path.join(args.root, 'configs/loops/workspace-health.json'), queueConfig: path.join(args.root, 'configs/loops/queues', `${args.queue}.json`), dispatcher: path.join(args.root, 'scripts/loops/hermes-loop-dispatch.mjs'), wrapper: path.join(args.root, 'scripts/loops/hermes-loop.mjs'), notifier: path.join(args.root, 'scripts/loops/hermes-loop-notify.mjs'), manifest: path.join(args.root, 'runtime/loop-engineering-hermes-install.json'), instructions: path.join(args.root, 'AGENTS.md'), schedulerService: path.join(systemdUserDir, unit), schedulerTimer: path.join(systemdUserDir, timer) };
   const conflicts = []; for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const confirmationSummary = { targetPlatform: 'Hermes', platformCli: args.hermesBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${timer}`, notificationTarget: text(args.language, 'source-bound at runtime (original Hermes conversation)', '运行时绑定到原始 Hermes 会话'), writesEnabled: args.confirmInstall };
-  const report = { version: 1, platform: 'hermes', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, hermesBin: args.hermesBin, hermesVersion: (hermes.stdout || hermes.stderr).trim().slice(0, 200), scheduler: { required: true, unit, timer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  const dashboardDescription = args.dashboardListen === 'tailscale' ? 'read-only Tailnet address on port 4174 coupled to hermes-gateway.service' : 'read-only http://127.0.0.1:4174/ coupled to hermes-gateway.service';
+  const confirmationSummary = { targetPlatform: 'Hermes', platformCli: args.hermesBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${timer}`, dashboard: dashboardDescription, notificationTarget: text(args.language, 'source-bound at runtime (original Hermes conversation)', '运行时绑定到原始 Hermes 会话'), writesEnabled: args.confirmInstall };
+  const report = { version: 1, platform: 'hermes', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, hermesBin: args.hermesBin, hermesVersion: (hermes.stdout || hermes.stderr).trim().slice(0, 200), scheduler: { required: true, unit, timer }, dashboardAutostart: { required: true, listen: args.dashboardListen, address: args.dashboardListen === 'localhost' ? 'http://127.0.0.1:4174/' : null, gateway: 'hermes-gateway.service' }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
   if (!args.json) console.log(formatConfirmationSummary(confirmationSummary, args.language));
   if (args.confirmInstall) {
@@ -168,6 +172,9 @@ async function main() {
     for (const [kind, content] of Object.entries(contents)) await writeFile(files[kind], content);
     const reload = await run(args.systemctlBin, ['--user', 'daemon-reload'], { cwd: args.root }); if (reload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(reload.stderr || reload.stdout).trim()}`);
     const enable = await run(args.systemctlBin, ['--user', 'enable', '--now', timer], { cwd: args.root }); if (enable.code !== 0) throw new Error(`Cannot enable Hermes Loop scheduler ${timer}: ${(enable.stderr || enable.stdout).trim()}`);
+    const dashboardInstaller = new URL('./dashboard-autostart-install.mjs', import.meta.url).pathname;
+    const dashboardInstall = await run(process.execPath, [dashboardInstaller, '--root', args.root, '--listen', args.dashboardListen, '--tailscale-bin', args.tailscaleBin, '--systemctl-bin', args.systemctlBin, '--confirm-install', '--json'], { cwd: args.root });
+    if (dashboardInstall.code !== 0) throw new Error(`Cannot install Dashboard gateway autostart: ${(dashboardInstall.stderr || dashboardInstall.stdout).trim()}`);
     const marker = instructionsBlock({ queue: args.queue, language: args.language }); const current = await readFile(files.instructions, 'utf8').catch(() => ''); if (!current.includes('<!-- loop-engineering:hermes:start -->')) await appendFile(files.instructions, marker);
     await mkdir(path.dirname(files.manifest), { recursive: true }); await writeFile(files.manifest, `${JSON.stringify({ version: 2, platform: 'hermes', language: args.language, installedAt: new Date().toISOString(), root: args.root, queue: args.queue, hermesBin: args.hermesBin, files: Object.entries(contents).map(([kind, content]) => ({ kind, path: files[kind], sha256: sha256(content) })), scheduler: { unit, timer } }, null, 2)}\n`);
   }

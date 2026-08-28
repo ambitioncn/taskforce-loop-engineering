@@ -72,6 +72,8 @@ loop-engineering-openclaw-install \
   --confirm-install
 ```
 
+The confirmed install also creates `loop-engineering-dashboard.service` on port `4174` and couples it to `openclaw-gateway.service`. Dashboard listening defaults to local-only `127.0.0.1`. To permit Tailnet clients, pass `--dashboard-listen tailscale`; the installer resolves `tailscale ip -4`, binds only that `100.x` address, and fails closed rather than binding all interfaces. Tailnet mode relies on Tailscale ACLs/Grants and does not add application-level login. The plan must declare the selected mode before writes, and the doctor must verify the Dashboard service and gateway drop-in. Use `loop-engineering-dashboard-autostart-install --listen localhost|tailscale` only for standalone install or repair.
+
 The installer never creates the worker agent. After installation, verify wiring before using a real task:
 
 ```bash
@@ -110,6 +112,8 @@ loop-engineering-hermes-smoke \
   --root /path/to/hermes/workspace \
   --queue agent-tasks
 ```
+
+The confirmed Hermes install creates the same Dashboard service and couples it to `hermes-gateway.service`. It accepts `--dashboard-listen localhost|tailscale` with the same default-local, Tailnet-only binding, fail-closed resolution, and ACL/Grant boundary as OpenClaw. The plan and doctor must expose and verify this coupling.
 
 The generated worker uses `hermes -z` (`--oneshot`); the notifier uses `hermes send` without
 an LLM call. Preserve source metadata and pass `--source-target` in Hermes

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 function parseArgs(argv) {
-  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', language: 'auto', json: false, confirmInstall: false, force: false };
+  const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', dashboardListen: 'localhost', tailscaleBin: 'tailscale', language: 'auto', json: false, confirmInstall: false, force: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--root') out.root = path.resolve(argv[++i]);
@@ -13,6 +13,8 @@ function parseArgs(argv) {
     else if (arg === '--worker-agent') out.workerAgent = argv[++i];
     else if (arg === '--openclaw-bin') out.openclawBin = argv[++i];
     else if (arg === '--systemctl-bin') out.systemctlBin = argv[++i];
+    else if (arg === '--dashboard-listen') out.dashboardListen = argv[++i];
+    else if (arg === '--tailscale-bin') out.tailscaleBin = argv[++i];
     else if (arg === '--language') out.language = argv[++i];
     else if (arg === '--confirm-install') out.confirmInstall = true;
     else if (arg === '--force') out.force = true;
@@ -20,6 +22,7 @@ function parseArgs(argv) {
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
+  if (!['localhost', 'tailscale'].includes(out.dashboardListen)) throw new Error('--dashboard-listen must be localhost or tailscale.');
   return out;
 }
 
@@ -290,7 +293,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   args.language = resolveLanguage(args.language);
   if (args.help) {
-    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--language auto|en|zh] [--openclaw-bin openclaw] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]');
+    console.log('Usage: loop-engineering-openclaw-install [--root workspace] [--queue agent-tasks] [--worker-agent agent-id] [--dashboard-listen localhost|tailscale] [--tailscale-bin tailscale] [--language auto|en|zh] [--openclaw-bin openclaw] [--systemctl-bin systemctl] [--confirm-install] [--force] [--json]');
     return;
   }
   safeId(args.queue, 'queue');
@@ -315,8 +318,9 @@ async function main() {
   };
   const conflicts = [];
   for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
-  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, notificationTarget: text(args.language, 'source-bound at runtime (original OpenClaw conversation)', '运行时绑定到原始 OpenClaw 会话'), writesEnabled: args.confirmInstall };
-  const report = { version: 1, platform: 'openclaw', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
+  const dashboardDescription = args.dashboardListen === 'tailscale' ? 'read-only Tailnet address on port 4174 coupled to openclaw-gateway.service' : 'read-only http://127.0.0.1:4174/ coupled to openclaw-gateway.service';
+  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, dashboard: dashboardDescription, notificationTarget: text(args.language, 'source-bound at runtime (original OpenClaw conversation)', '运行时绑定到原始 OpenClaw 会话'), writesEnabled: args.confirmInstall };
+  const report = { version: 1, platform: 'openclaw', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, dashboardAutostart: { required: true, listen: args.dashboardListen, address: args.dashboardListen === 'localhost' ? 'http://127.0.0.1:4174/' : null, gateway: 'openclaw-gateway.service' }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   report.next = args.confirmInstall ? text(args.language, 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.', '运行 loop-engineering-openclaw-doctor，然后路由一个无害的冒烟任务。') : text(args.language, 'Review this plan, then rerun with --confirm-install.', '检查此计划，然后使用 --confirm-install 重新运行。');
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
   if (!args.json) console.log(formatConfirmationSummary(confirmationSummary, args.language));
@@ -359,6 +363,9 @@ async function main() {
     if (daemonReload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(daemonReload.stderr || daemonReload.stdout).trim() || `exit ${daemonReload.code}`}`);
     const enableTimer = await run(args.systemctlBin, ['--user', 'enable', '--now', schedulerTimer], { cwd: args.root });
     if (enableTimer.code !== 0) throw new Error(`Cannot enable Loop scheduler timer ${schedulerTimer}: ${(enableTimer.stderr || enableTimer.stdout).trim() || `exit ${enableTimer.code}`}`);
+    const dashboardInstaller = new URL('./dashboard-autostart-install.mjs', import.meta.url).pathname;
+    const dashboardInstall = await run(process.execPath, [dashboardInstaller, '--root', args.root, '--listen', args.dashboardListen, '--tailscale-bin', args.tailscaleBin, '--systemctl-bin', args.systemctlBin, '--confirm-install', '--json'], { cwd: args.root });
+    if (dashboardInstall.code !== 0) throw new Error(`Cannot install Dashboard gateway autostart: ${(dashboardInstall.stderr || dashboardInstall.stdout).trim()}`);
     const instructions = await exists(files.instructions) ? await readFile(files.instructions, 'utf8') : '';
     const managedInstructions = instructionsBlock(args);
     if (!instructions.includes('<!-- loop-engineering:openclaw:start -->')) await appendFile(files.instructions, managedInstructions);

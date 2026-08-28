@@ -45,6 +45,11 @@ async function main() {
     'scripts/loops/openclaw-loop-notify.mjs',
     'AGENTS.md'
   ];
+  const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
+  required.push(
+    path.relative(args.root, path.join(systemdUserDir, 'loop-engineering-dashboard.service')),
+    path.relative(args.root, path.join(systemdUserDir, 'openclaw-gateway.service.d', 'loop-engineering-dashboard.conf'))
+  );
   const checks = [];
   for (const relative of required) checks.push({ id: `file:${relative}`, ok: await present(path.join(args.root, relative)) });
   const cli = await run(args.openclawBin, ['--version'], { cwd: args.root });
