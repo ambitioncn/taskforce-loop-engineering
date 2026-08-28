@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.15.12 - 2026-08-28
+
+- Fix public CI setup on repositories that intentionally do not commit an npm lockfile.
+
 ## 0.15.11 - 2026-08-28
 
 - Add a transactional state kernel with typed effects, receipt chaining, CAS/fencing, exact-effect replay, crash recovery, and completion fencing.
