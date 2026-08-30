@@ -120,6 +120,14 @@ an LLM call. Preserve source metadata and pass `--source-target` in Hermes
 `platform:chat_id[:thread_id]` format. The managed systemd scheduler owns wakeups
 so durable queue continuity does not depend on resuming a Hermes Cron session.
 
+## Cross-interface Human Gates
+
+Dashboard and chat approvals use one Gate Command core and one authoritative gate artifact. Cards must show project/task, Gate ID, action, reason, impact, risk, cost/budget, evidence, Dashboard URL, expiry and generation; processed cards are refreshed disabled. Only card buttons or exact card-bound `/approve gate_<id>`, `/reject gate_<id>` and `/request_revision gate_<id> <reason>` replies may mutate a gate. Ordinary chat, quotes, forwards, screenshots and ordinal phrases fail closed as `ignored_untrusted_chat`; `/show_gate gate_<id>` is display-only.
+
+The OpenClaw installer generates `scripts/loops/openclaw-loop-gate.mjs`. A trusted Feishu callback/plugin transport must verify the official signature or encrypted-event envelope, timestamp/nonce and secret before invoking it with `LOOP_GATE_CHANNEL=feishu` and `LOOP_FEISHU_SIGNATURE_VERIFIED=1`; missing verification fails with `feishu_signature_unverified`. The bridge itself performs no delivery. Other channel transports pass normalized, source-bound events. Dashboard and chat commands share actor/source binding, generation fencing, idempotency receipts, confirmation escalation and synchronized card state.
+
+After installation, run `loop-engineering-openclaw-doctor` and `loop-engineering-openclaw-smoke`. Doctor syntax-checks and locally self-tests the Gate bridge; smoke remains disposable and uses dry-run notifications. Neither command sends an online test message.
+
 ## Conversation Contract
 
 Interpret explicit loop language as follows:

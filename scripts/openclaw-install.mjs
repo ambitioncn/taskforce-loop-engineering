@@ -181,6 +181,7 @@ function run(args) {
     child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
   });
 }
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runWhenUnlocked(args, waitMs = 300000) {
   const deadline = Date.now() + waitMs;
@@ -229,6 +230,31 @@ if (command === 'route') {
 `;
 }
 
+function gateBridgeSource({ humanGateAdapter }) {
+  return `#!/usr/bin/env node
+import { handleChannelGateEvent, normalizeFeishuGateEvent } from ${JSON.stringify(humanGateAdapter)};
+if (process.argv.includes('--self-test')) {
+  let rejected = false;
+  try { normalizeFeishuGateEvent({ event: {} }); } catch (error) { rejected = error?.message === 'feishu_signature_unverified'; }
+  if (!rejected) throw new Error('feishu_signature_boundary_not_fail_closed');
+  const ignored = await handleChannelGateEvent(process.env.LOOP_WORKSPACE_ROOT || process.cwd(), { kind: 'ordinary_message', text: 'approve the first one' });
+  if (ignored.outcome !== 'ignored_untrusted_chat') throw new Error('ordinary_chat_not_fail_closed');
+  process.stdout.write(JSON.stringify({ status: 'ok', externalWrite: false, signatureBoundary: 'fail_closed', ordinaryChat: 'ignored' }) + '\\n');
+  process.exit(0);
+}
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+if (!chunks.length) throw new Error('gate_event_required_on_stdin');
+const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+const channel = String(process.env.LOOP_GATE_CHANNEL || payload.channel || '').toLowerCase();
+const event = channel === 'feishu'
+  ? normalizeFeishuGateEvent(payload, { signatureVerified: process.env.LOOP_FEISHU_SIGNATURE_VERIFIED === '1' })
+  : payload;
+const result = await handleChannelGateEvent(process.env.LOOP_WORKSPACE_ROOT || process.cwd(), event);
+process.stdout.write(JSON.stringify(result) + '\\n');
+`;
+}
+
 function schedulerServiceSource({ root, queue, language }) {
   return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
 }
@@ -270,6 +296,8 @@ function instructionsBlock({ queue, language }) {
 - 从当前工作区运行 \`node scripts/loops/openclaw-loop.mjs route --message "<完整用户消息>"\`，并保留来源元数据。
 - 会话来源任务必须使用标准包装器。缺少来源元数据时必须失败关闭，不能退回手工入队或直接运行队列。
 - 人工门禁或终态只有在通知命令成功并写入通知记录后才算已送达。
+- Dashboard 与聊天审批必须共用 Gate Command 和同一份门禁状态；聊天接入使用 \`scripts/loops/openclaw-loop-gate.mjs\`。
+- 飞书回调必须先由可信传输层验签，再设置 \`LOOP_FEISHU_SIGNATURE_VERIFIED=1\` 调用 Gate bridge；未验签失败关闭。普通聊天、引用、转发和截图不能审批。
 - 已由 Loop 管理的任务必须直接执行，不能再次路由。
 - 状态查询只读。高风险外部动作、破坏性操作、生产变更、凭据操作和记忆迁移仍需单独确认。
 - 队列：\`${queue}\`。
@@ -283,6 +311,8 @@ function instructionsBlock({ queue, language }) {
 - Run \`node scripts/loops/openclaw-loop.mjs route --message "<full user message>"\` from this workspace and preserve source metadata when available.
 - For conversation-originated work, the standard wrapper is mandatory. Missing source metadata must fail closed; never fall back to manual enqueue or direct run-queue.
 - A human-gated or terminal state is not delivered until its notification command succeeds and writes a notification record.
+- Dashboard and chat approvals must share the Gate Command core and one gate state; chat transports use \`scripts/loops/openclaw-loop-gate.mjs\`.
+- A trusted transport must verify Feishu callbacks before setting \`LOOP_FEISHU_SIGNATURE_VERIFIED=1\`; unverified callbacks fail closed. Ordinary chat, quotes, forwards, and screenshots cannot approve.
 - An already loop-managed task must be executed directly and never routed again.
 - Status questions are read-only. High-risk external, destructive, production, credential, or memory migration actions remain separately gated.
 - Queue: \`${queue}\`.
@@ -302,6 +332,7 @@ async function main() {
   const worker = await resolveWorkerAgent(args);
   args.workerAgent = worker.workerAgent;
   args.loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+  args.humanGateAdapter = new URL('../lib/human-gate-channel-adapter.mjs', import.meta.url).href;
   const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
   const schedulerUnit = `openclaw-loop-${args.queue}-scheduler.service`;
   const schedulerTimer = `openclaw-loop-${args.queue}-scheduler.timer`;
@@ -311,6 +342,7 @@ async function main() {
     dispatcher: path.join(args.root, 'scripts', 'loops', 'openclaw-loop-dispatch.mjs'),
     wrapper: path.join(args.root, 'scripts', 'loops', 'openclaw-loop.mjs'),
     notifier: path.join(args.root, 'scripts', 'loops', 'openclaw-loop-notify.mjs'),
+    gateBridge: path.join(args.root, 'scripts', 'loops', 'openclaw-loop-gate.mjs'),
     manifest: path.join(args.root, 'runtime', 'loop-engineering-openclaw-install.json'),
     instructions: path.join(args.root, 'AGENTS.md'),
     schedulerService: path.join(systemdUserDir, schedulerUnit),
@@ -319,7 +351,7 @@ async function main() {
   const conflicts = [];
   for (const [kind, file] of Object.entries(files)) if (!['instructions', 'workspaceHealth', 'manifest'].includes(kind) && await exists(file)) conflicts.push(path.relative(args.root, file));
   const dashboardDescription = args.dashboardListen === 'tailscale' ? 'read-only Tailnet address on port 4174 coupled to openclaw-gateway.service' : 'read-only http://127.0.0.1:4174/ coupled to openclaw-gateway.service';
-  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, dashboard: dashboardDescription, notificationTarget: text(args.language, 'source-bound at runtime (original OpenClaw conversation)', '运行时绑定到原始 OpenClaw 会话'), writesEnabled: args.confirmInstall };
+  const confirmationSummary = { targetPlatform: 'OpenClaw', platformCli: args.openclawBin, workspace: args.root, queue: args.queue, scheduler: `systemd user timer ${schedulerTimer}`, dashboard: dashboardDescription, humanGate: 'Dashboard + source-bound chat Gate Command bridge', notificationTarget: text(args.language, 'source-bound at runtime (original OpenClaw conversation)', '运行时绑定到原始 OpenClaw 会话'), writesEnabled: args.confirmInstall };
   const report = { version: 1, platform: 'openclaw', language: args.language, status: args.confirmInstall ? 'installed' : 'plan_only', readOnly: !args.confirmInstall, root: args.root, queue: args.queue, workerAgent: args.workerAgent, workerSelection: worker.selection, availableAgents: worker.availableAgents, workerValidated: true, createsWorkerAgent: false, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, scheduler: { required: true, unit: schedulerUnit, timer: schedulerTimer }, dashboardAutostart: { required: true, listen: args.dashboardListen, address: args.dashboardListen === 'localhost' ? 'http://127.0.0.1:4174/' : null, gateway: 'openclaw-gateway.service' }, confirmationSummary, files: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, path.relative(args.root, file)])), conflicts };
   report.next = args.confirmInstall ? text(args.language, 'Run loop-engineering-openclaw-doctor, then route a harmless smoke task.', '运行 loop-engineering-openclaw-doctor，然后路由一个无害的冒烟任务。') : text(args.language, 'Review this plan, then rerun with --confirm-install.', '检查此计划，然后使用 --confirm-install 重新运行。');
   if (conflicts.length && !args.force && args.confirmInstall) throw new Error(`Refusing to overwrite: ${conflicts.join(', ')}. Use --force after review.`);
@@ -350,12 +382,14 @@ async function main() {
     const dispatcherContent = dispatcherSource(args);
     const wrapperContent = wrapperSource(args);
     const notifierContent = notifierSource(args);
+    const gateBridgeContent = gateBridgeSource(args);
     const schedulerServiceContent = schedulerServiceSource(args);
     const schedulerTimerContent = schedulerTimerSource(args);
     await writeFile(files.queueConfig, queueContent);
     await writeFile(files.dispatcher, dispatcherContent);
     await writeFile(files.wrapper, wrapperContent);
     await writeFile(files.notifier, notifierContent);
+    await writeFile(files.gateBridge, gateBridgeContent);
     await mkdir(systemdUserDir, { recursive: true });
     await writeFile(files.schedulerService, schedulerServiceContent);
     await writeFile(files.schedulerTimer, schedulerTimerContent);
@@ -371,12 +405,13 @@ async function main() {
     if (!instructions.includes('<!-- loop-engineering:openclaw:start -->')) await appendFile(files.instructions, managedInstructions);
     await mkdir(path.dirname(files.manifest), { recursive: true });
     await writeFile(files.manifest, `${JSON.stringify({
-      version: 3, queue: args.queue, language: args.language, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
+      version: 4, queue: args.queue, language: args.language, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
       managedFiles: [
         { path: path.relative(args.root, files.queueConfig), sha256: sha256(queueContent) },
         { path: path.relative(args.root, files.dispatcher), sha256: sha256(dispatcherContent) },
         { path: path.relative(args.root, files.wrapper), sha256: sha256(wrapperContent) },
-        { path: path.relative(args.root, files.notifier), sha256: sha256(notifierContent) }
+        { path: path.relative(args.root, files.notifier), sha256: sha256(notifierContent) },
+        { path: path.relative(args.root, files.gateBridge), sha256: sha256(gateBridgeContent) }
       ],
       managedUnits: [
         { path: files.schedulerService, unit: schedulerUnit, sha256: sha256(schedulerServiceContent) },

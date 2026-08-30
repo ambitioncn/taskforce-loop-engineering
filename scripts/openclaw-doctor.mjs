@@ -43,6 +43,7 @@ async function main() {
     'scripts/loops/openclaw-loop-dispatch.mjs',
     'scripts/loops/openclaw-loop.mjs',
     'scripts/loops/openclaw-loop-notify.mjs',
+    'scripts/loops/openclaw-loop-gate.mjs',
     'AGENTS.md'
   ];
   const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
@@ -72,6 +73,13 @@ async function main() {
       env: { ...process.env, LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'feishu', target: 'user:loop-doctor-dry-run', account: 'doctor', reply_to: 'doctor-message' }) }
     });
     checks.push({ id: 'notification_dry_run', ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim().slice(0, 500) });
+  }
+  const gateBridge = path.join(args.root, 'scripts/loops/openclaw-loop-gate.mjs');
+  if (await present(gateBridge)) {
+    const syntax = await run(process.execPath, ['--check', gateBridge], { cwd: args.root });
+    checks.push({ id: 'human_gate_bridge_syntax', ok: syntax.code === 0, detail: (syntax.stderr || syntax.stdout).trim().slice(0, 500) });
+    const selfTest = await run(process.execPath, [gateBridge, '--self-test'], { cwd: args.root, env: { ...process.env, LOOP_WORKSPACE_ROOT: args.root } });
+    checks.push({ id: 'human_gate_bridge_self_test', ok: selfTest.code === 0 && /"externalWrite":false/.test(selfTest.stdout), detail: (selfTest.stdout || selfTest.stderr).trim().slice(0, 500) });
   }
   const failed = checks.filter((check) => !check.ok);
   const report = { version: 1, status: failed.length ? 'fail' : 'ok', readOnly: true, externalWrite: false, root: args.root, queue: args.queue, workerAgent: args.workerAgent, checks, failed: failed.map((check) => check.id) };

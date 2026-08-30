@@ -1,5 +1,7 @@
 # Multi-Agent Control Plane (P2)
 
+The product team layer extends this same control-plane state—never a second orchestrator—with runtime-aware registry records, capacity/load-aware explainable matching, targeted wake events, role-independent peer messages, conflict records, and a unified workbench.
+
 P2 stores typed todos, registered agents, leases, handoffs, and ownership history in `runtime/loops/control-plane/state.json`. Every mutation is serialized by an atomic filesystem mutex and committed with rename. `audit.jsonl` records each ownership transition.
 
 ## Todo contract
@@ -26,6 +28,12 @@ todo-handoff --todo-id ID --agent-id AGENT --target-agent-id AGENT --fencing-tok
 todo-accept|todo-reject --handoff-id ID --agent-id AGENT
 todo-recover [--now EPOCH_MS]
 todo-import-legacy
+todo-match [--todo-id ID]
+agent-wake --payload-json JSON
+agent-wake-ack --payload-json JSON
+peer-message --payload-json JSON
+todo-conflict-resolve --payload-json JSON
+team-workbench
 ```
 
 `--todo-json` and `--agent-json` accept either an inline JSON object or a file path. All commands accept `--root` and emit JSON.

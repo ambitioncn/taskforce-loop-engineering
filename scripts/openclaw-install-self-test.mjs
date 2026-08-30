@@ -104,6 +104,8 @@ if (schedulerTick.code !== 0) throw new Error(`installed scheduler tick failed: 
 const schedulerState = JSON.parse(await readFile(path.join(root, 'runtime/loops/test-tasks/scheduler/state.json'), 'utf8'));
 if (!schedulerState.generatedAt || !schedulerState.nextRunAt) throw new Error('installed scheduler tick did not persist its heartbeat and cadence');
 const notifier = await readFile(path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'utf8');
+const gateBridge = await readFile(path.join(root, 'scripts/loops/openclaw-loop-gate.mjs'), 'utf8');
+if (!gateBridge.includes('feishu_signature_unverified') || !gateBridge.includes('ignored_untrusted_chat') || !gateBridge.includes('handleChannelGateEvent')) throw new Error('installed Human Gate bridge is incomplete');
 if (!notifier.includes("'message', 'send'") || !notifier.includes('source.channel') || !notifier.includes('source.target')) throw new Error('channel-neutral notifier missing');
 const delivery = await new Promise((resolve) => {
   const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'async result'], {
@@ -129,7 +131,7 @@ const doctorResult = await new Promise((resolve) => {
 });
 if (doctorResult.code !== 0) throw new Error(`doctor failed: ${doctorResult.stderr}`);
 const doctorReport = JSON.parse(doctorResult.stdout);
-if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok)) throw new Error('doctor did not complete a safe notification dry-run');
+if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok) || !doctorReport.checks.some((check) => check.id === 'human_gate_bridge_self_test' && check.ok)) throw new Error('doctor did not complete safe notification and Human Gate self-tests');
 const smoke = new URL('./openclaw-smoke.mjs', import.meta.url).pathname;
 const smokeSource = await readFile(smoke, 'utf8');
 if (!smokeSource.includes('Do not change user or project files, configuration, credentials, or external state.')
@@ -151,7 +153,7 @@ const smokeReport = JSON.parse(smokeResult.stdout);
 if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
 try { await readFile(path.join(root, `configs/loops/queues/${smokeReport.smokeQueue}.json`)); throw new Error('smoke config was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 try { await readFile(path.join(root, `runtime/loops/${smokeReport.smokeQueue}/state.json`)); throw new Error('smoke runtime was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs']) {
+for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs', 'scripts/loops/openclaw-loop-gate.mjs']) {
   const syntax = await run(['--help']);
   if (syntax.code !== 0) throw new Error(`installer help failed while checking ${generated}`);
   const check = await new Promise((resolve) => {

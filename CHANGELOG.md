@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.14 - 2026-08-30
+
+- Add one authoritative cross-interface Human Gate command core for Dashboard and trusted chat adapters, with strict source binding, generation fencing, idempotency receipts, confirmation escalation, and fail-closed handling of ordinary chat.
+- Upgrade quota checks into a runtime decision engine covering token, time, cost, and turn budgets, verified-only spend, idle-free accounting, scheduler hints, and audited safe fallback work.
+- Productize the durable multi-agent control plane with agent registration, explainable matching, targeted wakeups, peer collaboration, fenced handoffs, conflict/orphan governance, and cross-runtime conformance evidence.
+- Extend the operator workspace, OpenClaw installer, doctor, smoke, and bundled skill to expose and verify the new gate, quota, team, and project-control capabilities.
+
 ## 0.15.13 - 2026-08-28
 
 - Add the project-first read-only operator workspace with terminal contracts, milestone/project status separation, revision lineage, human gates, external-action reservations, and acceptance/final-judge timelines.

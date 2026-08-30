@@ -1,6 +1,6 @@
 {
   "name": "taskforce-loop-engineering",
-  "version": "0.15.13",
+  "version": "0.15.14",
   "private": false,
   "description": "OpenClaw-native loop engineering CLI, templates, and skill for verifiable agent work loops.",
   "type": "module",
@@ -18,24 +18,30 @@
     "run-loop-cron.sh": "scripts/run-loop-cron.sh"
   },
   "scripts": {
-    "test": "npm run check && npm run check:competitive && npm run check:operator-workspace",
+    "test": "npm run check:human-gates && npm run check && npm run check:competitive && npm run check:operator-workspace",
     "check:operator-workspace": "node --check scripts/operator-workspace-final-judgement.mjs && node --check scripts/dashboard-autostart-install.mjs && node scripts/dashboard-autostart-self-test.mjs && node scripts/operator-workspace-final-judgement.mjs",
     "check:competitive": "node --check lib/transactional-state-kernel.mjs && node --check lib/goal-api.mjs && node scripts/competitive-acceptance.mjs",
-    "check:adapters": "node --check lib/runtime-adapter-sdk.mjs && node scripts/runtime-adapter-conformance.mjs",
+    "check:adapters": "node --check lib/runtime-adapter-sdk.mjs && node scripts/runtime-adapter-conformance.mjs && node scripts/agent-team-control-plane-self-test.mjs",
+    "check:agent-team-live": "node scripts/live-agent-team-conformance.mjs",
     "demo:adapter": "node examples/adapter-sdk-demo.mjs",
     "check:production-trust": "node --check lib/runtime-adapter-v1.mjs && node --check lib/durable-journal.mjs && node --check lib/execution-ledger.mjs && node --check lib/production-evidence.mjs && node --check lib/upgrade-planner.mjs && node scripts/production-acceptance.mjs",
     "check:config-drift": "node scripts/distribution-skill-self-test.mjs && node --check scripts/config-drift-self-test.mjs && node scripts/config-drift-self-test.mjs",
     "check:openclaw-install": "node --check scripts/openclaw-install.mjs && node --check scripts/openclaw-doctor.mjs && node --check scripts/openclaw-smoke.mjs && node --check scripts/openclaw-manage.mjs && node scripts/openclaw-install-self-test.mjs",
     "check:hermes-install": "node --check scripts/hermes-install.mjs && node --check scripts/hermes-doctor.mjs && node --check scripts/hermes-smoke.mjs && node scripts/hermes-install-self-test.mjs",
     "check:project-gates": "node --check lib/core.mjs && node scripts/project-gate-reconciliation-self-test.mjs",
-    "check": "npm run check:config-drift && npm run check:openclaw-install && npm run check:hermes-install && node --check bin/loop-engineering.mjs && node --check lib/core.mjs && node --check lib/action-reservations.mjs && node --check lib/todo-control-plane.mjs && node --check lib/operator-dashboard.mjs && node scripts/action-reservation-self-test.mjs && node scripts/todo-control-plane-self-test.mjs && node scripts/operator-dashboard-self-test.mjs && node scripts/final-judgement-self-test.mjs && node scripts/route-notify-self-test.mjs && node scripts/scheduler-heartbeat-self-test.mjs && node scripts/human-gate-lifecycle-v2-self-test.mjs && node bin/loop-engineering.mjs verify --config templates/workspace-health.json --root . && node bin/loop-engineering.mjs queue-status --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs project-intake --root /tmp/loop-engineering-check --name smoke-project --brief \"Build a small website project\" --type auto --check \"npm test\" --json >/dev/null && node bin/loop-engineering.mjs project-plan --root /tmp/loop-engineering-check --project smoke-project --force --json >/dev/null && node bin/loop-engineering.mjs project-status --root /tmp/loop-engineering-check --project smoke-project --json >/dev/null && node bin/loop-engineering.mjs queue-scheduler-tick --queue smoke --root /tmp/loop-engineering-check --plan-only --force-due --json >/dev/null && node bin/loop-engineering.mjs queue-scheduler-tick --queue smoke-progress --root /tmp/loop-engineering-check --plan-only --force-due --progress-report --progress-report-when-not-due --json >/dev/null && node bin/loop-engineering.mjs workflow-metrics --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs workflow-tune-plan --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs code-queue-init --queue smoke-code --root /tmp/loop-engineering-check --force >/dev/null && node bin/loop-engineering.mjs code-worktree-list --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-task-status --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-task-dashboard --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-worktree-cleanup-plan --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-worktree-cleanup --queue smoke-code --root /tmp/loop-engineering-check --confirm-cleanup --json >/dev/null && node bin/loop-engineering.mjs code-patch-verify --patch README.md --root . --json >/dev/null && node bin/loop-engineering.mjs code-patch-apply-plan --patch README.md --json >/dev/null && node bin/loop-engineering.mjs queue-revision-ci-self-test --queue smoke-ci --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs summarize --root . --json >/dev/null && node bin/loop-engineering.mjs dashboard-health --root . --max-age-seconds 999999999 --json >/dev/null && node bin/loop-engineering.mjs doctor --root . --json >/dev/null",
+    "check:human-gates": "node --check lib/human-gate-command.mjs && node --check lib/human-gate-channel-adapter.mjs && node scripts/human-gate-command-self-test.mjs && node scripts/human-gate-final-judgement.mjs",
+    "check": "npm run check:config-drift && npm run check:openclaw-install && npm run check:hermes-install && node --check bin/loop-engineering.mjs && node --check lib/core.mjs && node --check lib/action-reservations.mjs && node --check lib/todo-control-plane.mjs && node --check lib/quota-runtime-decision.mjs && node --check lib/operator-dashboard.mjs && node scripts/action-reservation-self-test.mjs && node scripts/todo-control-plane-self-test.mjs && node scripts/quota-runtime-decision-self-test.mjs && node scripts/operator-dashboard-self-test.mjs && node scripts/final-judgement-self-test.mjs && node scripts/route-notify-self-test.mjs && node scripts/scheduler-heartbeat-self-test.mjs && node scripts/human-gate-lifecycle-v2-self-test.mjs && node bin/loop-engineering.mjs verify --config templates/workspace-health.json --root . && node bin/loop-engineering.mjs queue-status --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs project-intake --root /tmp/loop-engineering-check --name smoke-project --brief \"Build a small website project\" --type auto --check \"npm test\" --json >/dev/null && node bin/loop-engineering.mjs project-plan --root /tmp/loop-engineering-check --project smoke-project --force --json >/dev/null && node bin/loop-engineering.mjs project-status --root /tmp/loop-engineering-check --project smoke-project --json >/dev/null && node bin/loop-engineering.mjs queue-scheduler-tick --queue smoke --root /tmp/loop-engineering-check --plan-only --force-due --json >/dev/null && node bin/loop-engineering.mjs queue-scheduler-tick --queue smoke-progress --root /tmp/loop-engineering-check --plan-only --force-due --progress-report --progress-report-when-not-due --json >/dev/null && node bin/loop-engineering.mjs workflow-metrics --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs workflow-tune-plan --queue smoke --root . --json >/dev/null && node bin/loop-engineering.mjs code-queue-init --queue smoke-code --root /tmp/loop-engineering-check --force >/dev/null && node bin/loop-engineering.mjs code-worktree-list --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-task-status --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-task-dashboard --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-worktree-cleanup-plan --queue smoke-code --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs code-worktree-cleanup --queue smoke-code --root /tmp/loop-engineering-check --confirm-cleanup --json >/dev/null && node bin/loop-engineering.mjs code-patch-verify --patch README.md --root . --json >/dev/null && node bin/loop-engineering.mjs code-patch-apply-plan --patch README.md --json >/dev/null && node bin/loop-engineering.mjs queue-revision-ci-self-test --queue smoke-ci --root /tmp/loop-engineering-check --json >/dev/null && node bin/loop-engineering.mjs summarize --root . --json >/dev/null && node bin/loop-engineering.mjs dashboard-health --root . --max-age-seconds 999999999 --json >/dev/null && node bin/loop-engineering.mjs doctor --root . --json >/dev/null",
     "pack:dry": "npm pack --dry-run"
   },
   "exports": {
     ".": "./lib/goal-api.mjs",
     "./goal": "./lib/goal-api.mjs",
     "./transactional-kernel": "./lib/transactional-state-kernel.mjs",
-    "./runtime-adapter-sdk": "./lib/runtime-adapter-sdk.mjs"
+    "./runtime-adapter-sdk": "./lib/runtime-adapter-sdk.mjs",
+    "./quota": "./lib/quota-runtime-decision.mjs",
+    "./todo-control-plane": "./lib/todo-control-plane.mjs",
+    "./human-gate-command": "./lib/human-gate-command.mjs",
+    "./human-gate-channel-adapter": "./lib/human-gate-channel-adapter.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -69,5 +75,12 @@
     "url": "https://github.com/ambitioncn/taskforce-loop-engineering/issues"
   },
   "homepage": "https://github.com/ambitioncn/taskforce-loop-engineering#readme",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "example": "examples",
+    "lib": "lib"
+  },
+  "author": ""
 }

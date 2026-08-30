@@ -90,7 +90,8 @@ try {
   assert.match(page, /No matching operational work/);
   assert.match(page, /Unable to load workspace/);
   assert.match(page, /Gates & reservations/);
-  assert.doesNotMatch(page, /approve|confirm-send|settle reservation/i);
+  assert.match(page, /approve/);
+  assert.doesNotMatch(page, /confirm-send|settle reservation/i);
   const project = await fetch(`${base}/api/v1/projects/p3`).then((response) => response.json());
   assert.equal(project.terminal_contract.milestone_rule, 'A milestone is not project completion.');
   assert.doesNotMatch(page, /<img src=x/);

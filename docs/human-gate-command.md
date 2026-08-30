@@ -1,0 +1,17 @@
+# Cross-interface Human Gate command core
+
+`lib/human-gate-command.mjs` is the sole mutation boundary for governed Human Gates. Dashboard POST actions and channel callbacks must call `executeGateCommand`; projections and adapters must not write gate files directly.
+
+Each gate records project, task, Gate ID, action, reason, impact, risk, cost/budget, evidence, Dashboard URL, expiry, generation, allowed actors and one or more exact source bindings. Commands require `gate_id`, `expected_generation`, actor identity, channel/message binding, reply binding for reply commands, and an idempotency key. Successful commands produce durable receipts. Per-gate exclusive creation plus the generation fence makes only the first valid cross-interface command commit.
+
+Allowed mutations are card-button callbacks and replies matching `/approve gate_<id>`, `/reject gate_<id>`, or `/request_revision gate_<id> <reason>` where the reply is bound to the registered card. Ordinary language, ordinal references, quotes, forwards and screenshots are ignored or rejected.
+
+High/critical risk, production, external publication, irreversible work, or cost at/above the configured threshold enters `awaiting_confirmation` and increments generation. A second command against the new generation is required. `request_revision` writes a revision artifact, increments generation, and invalidates old cards. Clients refresh from `/api/v1/gates`; processed cards render disabled.
+
+The Feishu adapter is deliberately transport-neutral. The HTTP/plugin transport must verify the official Feishu callback signature or encrypted-event envelope before normalization, then call `normalizeFeishuGateEvent(payload, { signatureVerified: true })`. Missing or failed verification throws `feishu_signature_unverified`; the adapter does not accept a raw callback on trust. Secret lookup, timestamp/nonce freshness and cryptographic verification belong to the transport boundary and must never be inferred from payload fields. The adapter performs no network I/O.
+
+Delivery/update code should render `gateCard`, send it through the platform transport, register the returned message ID as a source binding, and refresh or disable the card after every durable receipt. Ordinary chat is fail-closed: only an exact card button, an exact command reply bound to the registered card, or the display-only `/show_gate gate_<id>` route is recognized. Natural language, quotes, forwards and screenshots never call the command core.
+
+OpenClaw installation creates `scripts/loops/openclaw-loop-gate.mjs`, a stdin/stdout Gate Command bridge. A trusted callback/plugin handler verifies the Feishu envelope first and invokes the bridge with `LOOP_GATE_CHANNEL=feishu` and `LOOP_FEISHU_SIGNATURE_VERIFIED=1`; other channels must supply an already normalized event. The bridge calls the same `executeGateCommand` path used by Dashboard. Dashboard and chat therefore share generation fencing, actor/source binding, receipts, idempotency and synchronized-card state; neither interface owns separate approval state.
+
+After installation run `loop-engineering-openclaw-doctor`, then `loop-engineering-openclaw-smoke`; both remain local/dry-run and verify the installed Gate Command bridge. Run `npm run check:human-gates` for unit, adapter, Dashboard HTTP integration, concurrency, replay, expiry, authorization, signature-boundary and misrecognition coverage. Tests use temporary local artifacts and make no external calls.

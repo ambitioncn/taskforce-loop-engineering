@@ -81,6 +81,7 @@ import {
   settleAction
 } from '../lib/action-reservations.mjs';
 import {
+  acknowledgeWake,
   claimTodo,
   createTodo,
   decideHandoff,
@@ -88,10 +89,15 @@ import {
   importLegacyTodos,
   inspectTodo,
   listTodos,
+  matchTodo,
   recoverTodos,
   registerAgent,
+  resolveOwnershipConflict,
   releaseTodo,
-  renewTodo
+  renewTodo,
+  sendPeerMessage,
+  teamWorkbench,
+  wakeAgent
 } from '../lib/todo-control-plane.mjs';
 import {
   buildOperatorProjection,
@@ -146,6 +152,7 @@ function parseArgs(argv) {
     else if (a === '--handoff-id') args.handoffId = argv[++i];
     else if (a === '--todo-json') args.todoJson = argv[++i];
     else if (a === '--agent-json') args.agentJson = argv[++i];
+    else if (a === '--payload-json') args.payloadJson = argv[++i];
     else if (a === '--state') args.todoState = argv[++i];
     else if (a === '--run-id') args.runId = argv[++i];
     else if (a === '--output') args.output = argv[++i];
@@ -5653,7 +5660,7 @@ async function main() {
   if (command === 'summarize') return summarizeCommand(args);
   if (command === 'doctor') return doctorCommand(args);
   if (command.startsWith('dashboard-')) return dashboardCommand(command, args);
-  if (command === 'agent-register' || command.startsWith('todo-')) return todoControlPlaneCommand(command, args);
+  if (['agent-register', 'agent-wake', 'agent-wake-ack', 'peer-message', 'team-workbench'].includes(command) || command.startsWith('todo-')) return todoControlPlaneCommand(command, args);
   if (command.startsWith('action-')) return actionReservationCommand(command, args);
   if (command === 'repair-plan') return repairPlanCommand(args);
   if (command === 'project-intake') return projectIntakeCommand(args);
@@ -5767,6 +5774,12 @@ async function todoControlPlaneCommand(command, args) {
   else if (command === 'todo-reject') result = await decideHandoff(args.root, { ...args, accept: false });
   else if (command === 'todo-recover') result = await recoverTodos(args.root, args);
   else if (command === 'todo-import-legacy') result = await importLegacyTodos(args.root, args);
+  else if (command === 'todo-match') result = await matchTodo(args.root, args);
+  else if (command === 'agent-wake') result = await wakeAgent(args.root, await jsonInput(args.payloadJson, '--payload-json'));
+  else if (command === 'agent-wake-ack') result = await acknowledgeWake(args.root, await jsonInput(args.payloadJson, '--payload-json'));
+  else if (command === 'peer-message') result = await sendPeerMessage(args.root, await jsonInput(args.payloadJson, '--payload-json'));
+  else if (command === 'todo-conflict-resolve') result = await resolveOwnershipConflict(args.root, await jsonInput(args.payloadJson, '--payload-json'));
+  else if (command === 'team-workbench') result = await teamWorkbench(args.root, args);
   else throw new Error(`Unknown command: ${command}`);
   console.log(JSON.stringify(result, null, 2));
   return result === null ? 1 : 0;

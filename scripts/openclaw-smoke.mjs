@@ -53,6 +53,10 @@ async function main() {
     const doctor = await run(process.execPath, [doctorScript, '--root', args.root, '--queue', args.queue, '--worker-agent', args.workerAgent, '--openclaw-bin', args.openclawBin, '--json'], { cwd: args.root });
     steps.push({ id: 'doctor', ok: doctor.code === 0 });
     if (doctor.code !== 0) throw new Error(`doctor failed: ${doctor.stderr || doctor.stdout}`);
+    const doctorReport = JSON.parse(doctor.stdout);
+    const gateSelfTestOk = doctorReport.checks?.some((check) => check.id === 'human_gate_bridge_self_test' && check.ok);
+    steps.push({ id: 'human_gate_bridge_self_test', ok: gateSelfTestOk === true });
+    if (!gateSelfTestOk) throw new Error('doctor did not verify the installed Human Gate bridge');
     const config = JSON.parse(await readFile(baseConfig, 'utf8'));
     config.queue = smokeQueue;
     config.description = 'Temporary read-only OpenClaw integration smoke queue.';

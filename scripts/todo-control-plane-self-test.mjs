@@ -23,7 +23,10 @@ await assert.rejects(() => renewTodo(root, { todoId: 'race', agentId: loser === 
 await todo('capability');
 assert.equal((await claimTodo(root, { todoId: 'capability', agentId: 'observer' })).reason, 'capability_mismatch');
 await todo('quota');
-assert.equal((await claimTodo(root, { todoId: 'quota', agentId: 'poor' })).reason, 'quota_exhausted');
+const quotaRejected = await claimTodo(root, { todoId: 'quota', agentId: 'poor' });
+assert.equal(quotaRejected.reason, 'quota_exhausted');
+assert.equal(quotaRejected.decision, 'wait');
+assert.equal(quotaRejected.scheduler_hint.action, 'wait');
 
 await todo('dependency');
 await todo('dependent', { dependencies: ['dependency'], priority: 100 });
