@@ -194,4 +194,29 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
   assert.deepEqual(judgement.residual_risks, ['A non-blocking operational risk remains after acceptance.']);
 }
 
+// Regression: once cp19 accepted the task's own terminal contract, a later
+// checkpoint carrying broader-project human acceptance cannot reopen it.
+{
+  const devPlan = { checkpoints: [{ id: 'cp1' }] };
+  const reviews = { reviews: [
+    {
+      checkpointId: 'cp19', sequence: 19, status: 'accepted',
+      projectCompletion: { status: 'complete' }, checkpointRisks: []
+    },
+    {
+      checkpointId: 'cp21', sequence: 21, status: 'blocked',
+      projectCompletion: { status: 'needs_human_acceptance' },
+      checkpointNextAction: 'owner accepts broader OpenReel v4 project'
+    }
+  ] };
+  const judgement = buildFinalJudgement(
+    { ...baseContract, task_scope: 'project', requires_human_gate: false },
+    basePlan, devPlan, { count: 21 }, reviews, { dispatchStatus: 'completed' }
+  );
+  assert.equal(judgement.outcome, 'ready_to_apply');
+  assert.deepEqual(judgement.coverage.effective_review_ids, ['cp19']);
+  assert.equal(judgement.coverage.terminal_lock, true);
+  assert.equal(judgement.requires_human_gate, false);
+}
+
 console.log('final judgement self-test passed');

@@ -40,7 +40,7 @@ assert(authorizedContract.constraints.allowed_actions.includes('paid_provider_ac
 assert(authorizedContract.constraints.blocked_actions.includes('credential_change_without_explicit_confirmation'));
 await writeFile(projectFile, `${JSON.stringify(spec, null, 2)}\n`);
 
-const b = await enqueueTask(root, { queue, title: 'OpenReel B-01', task: 'Project openreel requirement B-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const b = await enqueueTask(root, { queue, title: 'OpenReel B-01', task: 'Project openreel requirement B-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const checkpointDir = path.join(taskRuntimeDirFor(root, queue, b.task.id), 'checkpoints');
 await mkdir(checkpointDir, { recursive: true });
 await writeFile(path.join(checkpointDir, 'cp1.json'), `${JSON.stringify({ version: 1, task_id: b.task.id, checkpoint_id: 'cp1', milestone_id: 'B-01', requirement_ids: ['B-01'], status: 'needs_human_input', blockers: ['Authorize B-01'] }, null, 2)}\n`);
@@ -132,7 +132,7 @@ await writeFile(projectFile, `${JSON.stringify({
 
 // A ready milestone with project in progress and a deferred authorization is
 // converted into a structured waiting gate, not left as prose on a done task.
-const deferred = await enqueueTask(root, { queue, title: 'OpenReel deferred S-01', task: 'Project openreel S-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const deferred = await enqueueTask(root, { queue, title: 'OpenReel deferred S-01', task: 'Project openreel S-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const deferredDir = path.join(taskRuntimeDirFor(root, queue, deferred.task.id), 'checkpoints');
 await mkdir(deferredDir, { recursive: true });
 await writeFile(path.join(deferredDir, 'cp-ready.json'), `${JSON.stringify({
@@ -164,7 +164,7 @@ await writeFile(authoritativeBacklog, `${JSON.stringify({
     { id: 'LOCAL-02', status: 'pending', dependsOn: ['LOCAL-01'] }
   ]
 }, null, 2)}\n`);
-const futureGateTask = await enqueueTask(root, { queue, title: 'OpenReel future production gate', task: 'Continue safe local backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const futureGateTask = await enqueueTask(root, { queue, title: 'OpenReel future production gate', task: 'Continue safe local backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const futureGateDir = path.join(taskRuntimeDirFor(root, queue, futureGateTask.task.id), 'checkpoints');
 await mkdir(futureGateDir, { recursive: true });
 await writeFile(path.join(futureGateDir, 'cp1.json'), `${JSON.stringify({
@@ -180,7 +180,7 @@ assert.equal((await queueStatus(root, queue)).waiting, 0);
 // deferred_gates must not materialize a gate without a concrete action and
 // authority requirement.
 await reconcileProjectGates(root, { queue });
-const conditional = await enqueueTask(root, { queue, title: 'OpenReel conditional policy boundary', task: 'Continue safe OpenReel backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const conditional = await enqueueTask(root, { queue, title: 'OpenReel conditional policy boundary', task: 'Continue safe OpenReel backlog', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const conditionalDir = path.join(taskRuntimeDirFor(root, queue, conditional.task.id), 'checkpoints');
 await mkdir(conditionalDir, { recursive: true });
 await writeFile(path.join(conditionalDir, 'cp1.json'), `${JSON.stringify({
@@ -194,7 +194,7 @@ assert.equal(conditionalNotice.results.some((item) => item.taskId === conditiona
 // A conditional formal blocker becomes current when the producer explicitly
 // marks it needed now and materialize=true. It must stop once, rather than be
 // filtered into a needs_revision/project_in_progress polling loop.
-const conditionalNow = await enqueueTask(root, { queue, title: 'OpenReel conditional blocker now', task: 'Wait for a real external precondition', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const conditionalNow = await enqueueTask(root, { queue, title: 'OpenReel conditional blocker now', task: 'Wait for a real external precondition', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const conditionalNowDir = path.join(taskRuntimeDirFor(root, queue, conditionalNow.task.id), 'checkpoints');
 await mkdir(conditionalNowDir, { recursive: true });
 await writeFile(path.join(conditionalNowDir, 'cp1.json'), `${JSON.stringify({
@@ -213,7 +213,7 @@ await reconcileProjectGates(root, { queue });
 // Authorization already granted or already consumed is audit context, not a
 // new human-input request. A future boundary is likewise dormant.
 for (const authorizationState of ['authorized', 'consumed', 'future']) {
-  const stateTask = await enqueueTask(root, { queue, title: `OpenReel ${authorizationState} authority`, task: 'Continue within recorded authority', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+  const stateTask = await enqueueTask(root, { queue, title: `OpenReel ${authorizationState} authority`, task: 'Continue within recorded authority', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
   const stateDir = path.join(taskRuntimeDirFor(root, queue, stateTask.task.id), 'checkpoints');
   await mkdir(stateDir, { recursive: true });
   await writeFile(path.join(stateDir, 'cp1.json'), `${JSON.stringify({
@@ -239,7 +239,7 @@ await writeFile(subprojectBacklog, `${JSON.stringify({
     { id: 'CDQI2-11', status: 'in_progress', dependsOn: ['CDQI2-10'] }
   ]
 }, null, 2)}\n`);
-const subprojectTask = await enqueueTask(root, { queue, title: 'OpenReel CDQI2 actionable backlog', task: 'Continue CDQI2-11', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const subprojectTask = await enqueueTask(root, { queue, title: 'OpenReel CDQI2 actionable backlog', task: 'Continue CDQI2-11', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const subprojectDir = path.join(taskRuntimeDirFor(root, queue, subprojectTask.task.id), 'checkpoints');
 await mkdir(subprojectDir, { recursive: true });
 await writeFile(path.join(subprojectDir, 'cp1.json'), `${JSON.stringify({
@@ -254,7 +254,7 @@ assert.equal(subprojectNotice.results.some((item) => item.taskId === subprojectT
 // A genuinely missing current authorization becomes a waiting gate once no
 // safe project work remains.
 await writeFile(authoritativeBacklog, `${JSON.stringify({ status: 'ongoing', items: [{ id: 'GLOBAL-01', status: 'accepted', dependsOn: [] }] }, null, 2)}\n`);
-const missing = await enqueueTask(root, { queue, title: 'OpenReel missing current authority', task: 'Perform currently gated action', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const missing = await enqueueTask(root, { queue, title: 'OpenReel missing current authority', task: 'Perform currently gated action', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const missingDir = path.join(taskRuntimeDirFor(root, queue, missing.task.id), 'checkpoints');
 await mkdir(missingDir, { recursive: true });
 await writeFile(path.join(missingDir, 'cp1.json'), `${JSON.stringify({
@@ -279,7 +279,7 @@ await writeFile(projectFile, `${JSON.stringify({
     backupRestoreRollbackRehearsal: 'standing_authorization_openreel_2026-08-19'
   }
 }, null, 2)}\n`);
-const coveredBlocker = await enqueueTask(root, { queue, title: 'OpenReel covered production blocker', task: 'Deploy accepted candidate', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const coveredBlocker = await enqueueTask(root, { queue, title: 'OpenReel covered production blocker', task: 'Deploy accepted candidate', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const coveredContract = await writeTaskContract(root, queue, coveredBlocker.task);
 assert.equal(coveredContract.contract.constraints.project_authorization.production_authorized, true);
 const coveredDir = path.join(taskRuntimeDirFor(root, queue, coveredBlocker.task.id), 'checkpoints');
@@ -294,7 +294,7 @@ assert.equal(coveredNotice.results.some((item) => item.taskId === coveredBlocker
 
 // Explicitly authorized blocker metadata is also non-materializable, while a
 // genuinely missing publication permission remains a human gate.
-const publication = await enqueueTask(root, { queue, title: 'OpenReel publication blocker', task: 'Publish candidate', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const publication = await enqueueTask(root, { queue, title: 'OpenReel publication blocker', task: 'Publish candidate', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 await writeTaskContract(root, queue, publication.task);
 const publicationDir = path.join(taskRuntimeDirFor(root, queue, publication.task.id), 'checkpoints');
 await mkdir(publicationDir, { recursive: true });
@@ -332,7 +332,7 @@ await rename(legacyInbox, `${legacyInbox}.moved`);
 await reconcileProjectGates(root, { queue });
 assert.equal((await queueStatus(root, queue)).done >= 1, true, 'accepted project task must close in done, not canceled');
 assert.equal(JSON.parse(await readFile(legacyGateFile, 'utf8')).status, 'superseded');
-const acceptedOptional = await enqueueTask(root, { queue, title: 'OpenReel optional operations transfer', task: 'Project openreel optional post-completion transfer', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const acceptedOptional = await enqueueTask(root, { queue, title: 'OpenReel optional operations transfer', task: 'Project openreel optional post-completion transfer', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner', sourceAccount: 'main' });
 const acceptedOptionalDir = path.join(taskRuntimeDirFor(root, queue, acceptedOptional.task.id), 'checkpoints');
 await mkdir(acceptedOptionalDir, { recursive: true });
 await writeFile(path.join(acceptedOptionalDir, 'cp1.json'), `${JSON.stringify({
@@ -344,4 +344,19 @@ const acceptedNotice = await notifyHumanInputRequests(root, { queue, notifyComma
 assert.equal(acceptedNotice.results.some((item) => item.taskId === acceptedOptional.task.id), false);
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 
-console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'future gate does not stop safe actionable backlog', 'conditional policy prose does not create a gate', 'authorized and consumed authority do not create gates', 'checkpoint-bound subproject backlog remains actionable', 'missing current authority creates a gate', 'standing-authorized production blocker does not create a gate', 'missing publication blocker creates a gate', 'accepted project optional deferred gate stays out of queue'] }));
+// Missing source/actor/generation binding must fail closed: no waiting move,
+// no gate command text, and no notification invocation.
+const unbound = await enqueueTask(root, { queue, title: 'Unbound human request', task: 'Project openreel B-01', projectId: 'openreel', sourceChannel: 'test', sourceTarget: 'owner' });
+const unboundDir = path.join(taskRuntimeDirFor(root, queue, unbound.task.id), 'checkpoints');
+await mkdir(unboundDir, { recursive: true });
+await writeFile(path.join(unboundDir, 'cp1.json'), `${JSON.stringify({
+  version: 1, task_id: unbound.task.id, checkpoint_id: 'cp1', milestone_id: 'B-01',
+  status: 'needs_human_input', blockers: [{ action: 'approve', required_authority: 'owner', authorization_state: 'missing', needed_when: 'now' }]
+}, null, 2)}\n`);
+const unboundNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+const unboundResult = unboundNotice.results.find((item) => item.taskId === unbound.task.id);
+assert.equal(unboundResult.outcome, 'fail_closed');
+assert.equal(unboundResult.message, undefined);
+assert.equal((await queueStatus(root, queue)).waiting, 0);
+
+console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'future gate does not stop safe actionable backlog', 'conditional policy prose does not create a gate', 'authorized and consumed authority do not create gates', 'checkpoint-bound subproject backlog remains actionable', 'missing current authority creates a gate', 'standing-authorized production blocker does not create a gate', 'missing publication blocker creates a gate', 'accepted project optional deferred gate stays out of queue', 'unbound gate fails closed without actionable text'] }));

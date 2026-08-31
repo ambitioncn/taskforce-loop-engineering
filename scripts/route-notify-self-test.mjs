@@ -423,8 +423,8 @@ await writeJson(path.join(root, 'configs', 'loops', 'queues', `${queue}.json`), 
 
 const gateDryRun = await notifyHumanInputRequests(root, { queue, dryRun: true });
 assert.equal(gateDryRun.results[0].outcome, 'dry_run');
-assert.match(gateDryRun.results[0].message, /Provide the SMS code/);
-assert.match(gateDryRun.results[0].message, /正在等待你的输入/);
+assert.equal(gateDryRun.results[0].preview, 'authoritative_gate_would_be_materialized');
+assert.equal(gateDryRun.results[0].message, undefined, 'dry-run must not emit an actionable reply command before gate materialization');
 const gateSent = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(gateSent.sent, 1);
 const gateId = gateSent.results[0].gateId;
@@ -544,7 +544,7 @@ await writeJson(path.join(regressionRoot, 'configs', 'loops', 'projects', 'demo.
 for (const [id, enqueuedAt] of [['history-done', '2026-01-01T00:00:00Z'], ['latest-done', '2026-01-02T00:00:00Z']]) {
   await writeJson(path.join(queueSubdirFor(regressionRoot, regressionQueue, 'done'), `${id}.json`), {
     id, title: `demo ${id}`, body: 'demo R-1', projectId: 'demo', status: 'completed', enqueuedAt,
-    source: { channel: 'test', target: 'owner' }
+    source: { channel: 'test', target: 'owner', account: 'main' }
   });
   await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, id), 'checkpoints', 'cp1.json'), {
     version: 1, task_id: id, checkpoint_id: 'cp1', milestone_id: 'R-1', sequence: 1,
@@ -577,7 +577,7 @@ await writeJson(path.join(queueSubdirFor(regressionRoot, regressionQueue, 'faile
   projectId: 'demo',
   status: 'blocked',
   enqueuedAt: '2026-01-03T00:00:00Z',
-  source: { channel: 'feishu', target: 'owner' }
+  source: { channel: 'feishu', target: 'owner', account: 'main' }
 });
 await writeJson(path.join(taskRuntimeDirFor(regressionRoot, regressionQueue, blockedProjectTask), 'checkpoints', 'cp2.json'), {
   version: 1,

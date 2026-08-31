@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.15 - 2026-08-31
+
+- Lock a task-level accepted terminal checkpoint monotonically so later broader-project governance cannot reopen or overwrite the completed task.
+- Require fully materialized, source/actor/generation-bound Human Gate artifacts before moving tasks to waiting or sending actionable notifications.
+- Fail closed for incomplete or non-authoritative Gate artifacts, and keep dry-run previews free of actionable reply commands.
+- Add regressions for broader-project scope creep after task acceptance, empty/unbound gates, authoritative waiting placement, and notification consistency.
+
 ## 0.15.14 - 2026-08-30
 
 - Add one authoritative cross-interface Human Gate command core for Dashboard and trusted chat adapters, with strict source binding, generation fencing, idempotency receipts, confirmation escalation, and fail-closed handling of ordinary chat.
