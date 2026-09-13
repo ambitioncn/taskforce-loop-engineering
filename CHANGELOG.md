@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.15.16 - 2026-09-14
+## 0.15.16 - 2026-09-13
 
 - Resolve canonical project identifiers from nested checkpoint completion metadata so migrated project tasks continue against the correct authoritative backlog.
 - Keep future external-action authorization gates deferred while safe local project work remains actionable.
