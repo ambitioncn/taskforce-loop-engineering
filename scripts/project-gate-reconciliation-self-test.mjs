@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { doctorReport, enqueueTask, notifyHumanInputRequests, projectStatus, queueStatus, reconcileProjectGates, resolveHumanInput, routeLoopMessage, taskRuntimeDirFor, writeTaskContract } from '../lib/core.mjs';
@@ -200,12 +200,21 @@ await writeFile(path.join(nestedProjectDir, 'cp1.json'), `${JSON.stringify({
   deferred_gates: [{
     id: 'production-later',
     action: 'production_deploy',
-    required_authority: 'Owner authorization after local candidate acceptance.'
+    required_authority: 'Owner authorization after local candidate acceptance.',
+    authorization_state: 'missing',
+    needed_when: 'now',
+    materialize: true
   }]
 }, null, 2)}\n`);
 const nestedProjectNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
 assert.equal(nestedProjectNotice.results.some((item) => item.taskId === nestedProjectTask.task.id), false);
-assert.equal((await queueStatus(root, queue)).waiting, 0);
+const nestedProjectStatus = await queueStatus(root, queue);
+assert.equal(nestedProjectStatus.waiting, 0);
+await access(path.join(root, nestedProjectTask.file));
+await assert.rejects(
+  access(path.join(taskRuntimeDirFor(root, queue, nestedProjectTask.task.id), 'human_input_gate.json')),
+  { code: 'ENOENT' }
+);
 
 // Conditional policy boundaries are not current blockers. Plain prose in
 // deferred_gates must not materialize a gate without a concrete action and
