@@ -15,6 +15,10 @@ await writeFile(mockOpenClaw, `#!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const args = process.argv.slice(2);
+if (args.includes('--account') && args[args.indexOf('--account') + 1] === 'doctor') {
+  console.error('Unknown account: doctor');
+  process.exit(1);
+}
 if (args[0] === '--version') console.log('OpenClaw mock 1.0');
 else if (args[0] === 'agents' && args[1] === 'list') console.log(JSON.stringify([{ id: 'builder' }]));
 else {
@@ -132,6 +136,7 @@ const doctorResult = await new Promise((resolve) => {
 if (doctorResult.code !== 0) throw new Error(`doctor failed: ${doctorResult.stderr}`);
 const doctorReport = JSON.parse(doctorResult.stdout);
 if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok) || !doctorReport.checks.some((check) => check.id === 'human_gate_bridge_self_test' && check.ok)) throw new Error('doctor did not complete safe notification and Human Gate self-tests');
+if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('doctor notification forwarded a synthetic account');
 const smoke = new URL('./openclaw-smoke.mjs', import.meta.url).pathname;
 const smokeSource = await readFile(smoke, 'utf8');
 if (!smokeSource.includes('Do not change user or project files, configuration, credentials, or external state.')
@@ -151,6 +156,7 @@ const smokeResult = await new Promise((resolve) => {
 if (smokeResult.code !== 0) throw new Error(`smoke failed: ${smokeResult.stderr}`);
 const smokeReport = JSON.parse(smokeResult.stdout);
 if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
+if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('smoke notification forwarded a synthetic account');
 try { await readFile(path.join(root, `configs/loops/queues/${smokeReport.smokeQueue}.json`)); throw new Error('smoke config was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 try { await readFile(path.join(root, `runtime/loops/${smokeReport.smokeQueue}/state.json`)); throw new Error('smoke runtime was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs', 'scripts/loops/openclaw-loop-gate.mjs']) {

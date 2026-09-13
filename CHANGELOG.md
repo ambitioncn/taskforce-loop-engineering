@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.17 - 2026-09-13
+
+- Stop OpenClaw doctor and disposable smoke probes from attaching the synthetic `doctor` account to dry-run notifications.
+- Preserve normal account forwarding for real source-bound notifications while remaining compatible with OpenClaw installations that reject unknown account ids during dry-run validation.
+- Add strict installer regression coverage that rejects any synthetic `--account doctor` delivery.
+
 ## 0.15.16 - 2026-09-13
 
 - Resolve canonical project identifiers from nested checkpoint completion metadata so migrated project tasks continue against the correct authoritative backlog.

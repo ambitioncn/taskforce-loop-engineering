@@ -70,7 +70,7 @@ async function main() {
   if (await present(notifier)) {
     const smoke = await run(process.execPath, [notifier, 'Loop Engineering notification dry-run'], {
       cwd: args.root,
-      env: { ...process.env, LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'feishu', target: 'user:loop-doctor-dry-run', account: 'doctor', reply_to: 'doctor-message' }) }
+      env: { ...process.env, LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'feishu', target: 'user:loop-doctor-dry-run', reply_to: 'doctor-message' }) }
     });
     checks.push({ id: 'notification_dry_run', ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim().slice(0, 500) });
   }
