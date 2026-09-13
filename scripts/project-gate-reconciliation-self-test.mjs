@@ -176,6 +176,37 @@ const futureNotice = await notifyHumanInputRequests(root, { queue, notifyCommand
 assert.equal(futureNotice.results.some((item) => item.taskId === futureGateTask.task.id), false);
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 
+// Older queue carriers can lack project metadata while the worker checkpoint
+// records the canonical project id inside project_completion. Resolve that id
+// before evaluating deferred gates so safe local backlog keeps running.
+const nestedProjectTask = await enqueueTask(root, {
+  queue,
+  title: 'Continue R1-R7',
+  task: 'Continue the next safe local milestone',
+  sourceChannel: 'test',
+  sourceTarget: 'owner',
+  sourceAccount: 'main'
+});
+const nestedProjectDir = path.join(taskRuntimeDirFor(root, queue, nestedProjectTask.task.id), 'checkpoints');
+await mkdir(nestedProjectDir, { recursive: true });
+await writeFile(path.join(nestedProjectDir, 'cp1.json'), `${JSON.stringify({
+  version: 1,
+  task_id: nestedProjectTask.task.id,
+  checkpoint_id: 'cp1',
+  status: 'ready_for_acceptance',
+  blockers: [],
+  project_completion: { project: 'openreel', status: 'in_progress' },
+  next_action: 'Implement LOCAL-02 locally.',
+  deferred_gates: [{
+    id: 'production-later',
+    action: 'production_deploy',
+    required_authority: 'Owner authorization after local candidate acceptance.'
+  }]
+}, null, 2)}\n`);
+const nestedProjectNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+assert.equal(nestedProjectNotice.results.some((item) => item.taskId === nestedProjectTask.task.id), false);
+assert.equal((await queueStatus(root, queue)).waiting, 0);
+
 // Conditional policy boundaries are not current blockers. Plain prose in
 // deferred_gates must not materialize a gate without a concrete action and
 // authority requirement.
