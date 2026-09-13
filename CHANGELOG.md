@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.16 - 2026-09-14
+
+- Resolve canonical project identifiers from nested checkpoint completion metadata so migrated project tasks continue against the correct authoritative backlog.
+- Keep future external-action authorization gates deferred while safe local project work remains actionable.
+- Add regression coverage for checkpoint-only project metadata and premature deferred-gate reconciliation.
+
 ## 0.15.15 - 2026-08-31
 
 - Lock a task-level accepted terminal checkpoint monotonically so later broader-project governance cannot reopen or overwrite the completed task.
