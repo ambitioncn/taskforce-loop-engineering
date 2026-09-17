@@ -67,6 +67,47 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 }
 
 {
+  // The OpenClaw embedded runner injects a recovery prompt when an assistant
+  // turn completes tool calls without a user-visible answer. A non-zero exit
+  // with this signature is a recoverable session protocol failure, so the
+  // runtime recovery path must rotate the worker session, not fail the task.
+  const classification = dispatchFailureClassification({
+    exitCode: 1,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({
+      finalPromptText: 'The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.',
+      finalAssistantVisibleText: 'The tool run finished, but no final summary was produced. I did not repeat any completed actions.',
+      replayInvalid: true,
+      livenessState: 'working',
+      completion: { stopReason: 'stop', finishReason: 'stop' }
+    }, null, 2)
+  });
+  assert.equal(classification.category, 'incomplete_turn');
+  assert.equal(classification.recoverableRuntime, true);
+  assert.equal(classification.requiresHumanAction, false);
+}
+
+{
+  // A healthy turn may still carry replayInvalid on the session. With a real
+  // final visible answer and exitCode 0 it must stay a plain success.
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({
+      finalAssistantVisibleText: '本轮已完成并写入 cp546.json。',
+      finalAssistantRawText: '本轮已完成并写入 cp546.json。',
+      replayInvalid: true,
+      livenessState: 'working',
+      completion: { stopReason: 'stop', finishReason: 'stop' }
+    }, null, 2)
+  });
+  assert.equal(classification.category, 'ok');
+  assert.equal(classification.recoverableRuntime, undefined);
+}
+
+{
   const classification = dispatchFailureClassification({
     exitCode: 0,
     timedOut: false,
