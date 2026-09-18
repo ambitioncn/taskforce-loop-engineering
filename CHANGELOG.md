@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.15.18 - 2026-09-18
+
+- Recover non-zero dispatcher runs that report OpenClaw's missing user-visible-answer prompt by rotating the runtime session and requeueing the task.
+- Preserve structured `incomplete_turn` and abandoned-liveness recovery even when a dispatcher wrapper exits successfully.
+- Prevent successful recovered turns or ordinary task text that quotes the prompt from being misclassified and replayed.
+- Add regression coverage for both recoverable failure and successful-output false-positive cases.
+
 ## 0.15.17 - 2026-09-13
 
 - Stop OpenClaw doctor and disposable smoke probes from attaching the synthetic `doctor` account to dry-run notifications.

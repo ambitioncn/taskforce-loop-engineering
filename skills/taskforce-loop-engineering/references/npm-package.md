@@ -1,7 +1,7 @@
 # npm Package
 
 Package name: `taskforce-loop-engineering`
-Version: `0.15.17`
+Version: `0.15.18`
 
 Install from npm:
 
