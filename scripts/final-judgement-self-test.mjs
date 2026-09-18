@@ -108,6 +108,45 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 }
 
 {
+  // A recovered turn may retain the earlier recovery prompt in its result.
+  // Once the wrapper exits successfully with a real visible answer, the weak
+  // natural-language signature must not override the successful outcome.
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({
+      finalPromptText: 'The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now.',
+      finalAssistantVisibleText: 'Recovery completed successfully; the final result is ready.',
+      finalAssistantRawText: 'Recovery completed successfully; the final result is ready.',
+      replayInvalid: false,
+      livenessState: 'working',
+      completion: { stopReason: 'stop', finishReason: 'stop' }
+    }, null, 2)
+  });
+  assert.equal(classification.category, 'ok');
+  assert.equal(classification.recoverableRuntime, undefined);
+}
+
+{
+  // Successful tasks can legitimately discuss the OpenClaw diagnostic text.
+  // Quoting it in task content must not turn a successful dispatch into a
+  // recoverable runtime interruption.
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: JSON.stringify({
+      taskBody: 'Review the diagnostic text "did not produce a user-visible answer" and propose a regression test.',
+      finalAssistantVisibleText: 'The review is complete and the regression test is documented.',
+      completion: { stopReason: 'stop', finishReason: 'stop' }
+    }, null, 2)
+  });
+  assert.equal(classification.category, 'ok');
+  assert.equal(classification.recoverableRuntime, undefined);
+}
+
+{
   const classification = dispatchFailureClassification({
     exitCode: 0,
     timedOut: false,
