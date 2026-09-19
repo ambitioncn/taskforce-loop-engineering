@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recover OpenClaw dispatcher launches rejected during Gateway restart drain by rotating the runtime session and requeueing the task.
+- Match only explicit restart-admission signatures on non-zero exits, leaving unrelated HTTP 503 responses and successful diagnostic text untouched.
+
 ## 0.15.18 - 2026-09-18
 
 - Recover non-zero dispatcher runs that report OpenClaw's missing user-visible-answer prompt by rotating the runtime session and requeueing the task.

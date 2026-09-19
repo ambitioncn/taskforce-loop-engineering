@@ -108,6 +108,45 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 }
 
 {
+  // A worker started while OpenClaw is draining for a Gateway restart exits
+  // before task execution. It must use runtime recovery instead of becoming a
+  // development failure.
+  const classification = dispatchFailureClassification({
+    exitCode: 1,
+    timedOut: false,
+    stderr: '[openclaw] Could not start the CLI.\nReason: gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed',
+    stdout: ''
+  });
+  assert.equal(classification.category, 'gateway_restart');
+  assert.equal(classification.recoverableRuntime, true);
+  assert.equal(classification.requiresHumanAction, false);
+}
+
+{
+  // Unrelated HTTP 503 responses do not prove a Gateway restart.
+  const classification = dispatchFailureClassification({
+    exitCode: 1,
+    timedOut: false,
+    stderr: 'upstream returned HTTP 503',
+    stdout: ''
+  });
+  assert.equal(classification.category, 'retryable_failure');
+  assert.equal(classification.recoverableRuntime, false);
+}
+
+{
+  // Successful task output may quote the diagnostic without being replayed.
+  const classification = dispatchFailureClassification({
+    exitCode: 0,
+    timedOut: false,
+    stderr: '',
+    stdout: 'Documented diagnostic: Gateway websocket admission closed'
+  });
+  assert.equal(classification.category, 'ok');
+  assert.equal(classification.recoverableRuntime, undefined);
+}
+
+{
   // A recovered turn may retain the earlier recovery prompt in its result.
   // Once the wrapper exits successfully with a real visible answer, the weak
   // natural-language signature must not override the successful outcome.
