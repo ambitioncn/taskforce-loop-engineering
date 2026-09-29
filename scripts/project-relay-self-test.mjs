@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureQueueDirs, projectRelayNext, queueStatus } from '../lib/core.mjs';
@@ -18,11 +18,13 @@ const spec = { schemaVersion: 1, project, type: 'code_project', queues: [{ queue
   backlogSource: 'project/backlog.json', acceptanceLedger: 'project/ledger.json' };
 const item = { id: 'local-1', status: 'ready', title: 'Local proof', task: 'Verify the local entry', autoRun: true,
   scope: 'local_only', externalActionsAllowed: false, humanGateRequired: false, dependsOn: [] };
-const task = { id: 'accepted-task', projectId: project, source: { channel: 'feishu', target: 'owner', account: 'main', message_id: 'message-1' } };
+const predecessor = { id: 'local-0', status: 'accepted' };
+const task = { id: 'accepted-task', projectId: project, backlogItemId: predecessor.id,
+  source: { channel: 'feishu', target: 'owner', account: 'main', message_id: 'message-1' } };
 const finalJudgement = { outcome: 'ready_to_apply', requires_human_gate: false };
 await ensureQueueDirs(root, queue);
 await writeJson(configFile, spec);
-await writeJson(backlogFile, { items: [item] });
+await writeJson(backlogFile, { items: [predecessor, item] });
 await writeJson(ledgerFile, { status: 'in_progress' });
 
 assert.equal(await projectRelayNext(root, { queue, task, finalJudgement: { outcome: 'blocked' } }), null);
@@ -33,17 +35,32 @@ await writeJson(configFile, spec);
 for (const unsafe of [{ ...item, humanGateRequired: true }, { ...item, externalActionsAllowed: true },
   { ...item, scope: 'production' }, { ...item, autoRun: false }, { ...item, blocked: true },
   { ...item, dependsOn: ['unaccepted'] }]) {
-  await writeJson(backlogFile, { items: [unsafe] });
+  await writeJson(backlogFile, { items: [predecessor, unsafe] });
   assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null);
 }
-await writeJson(backlogFile, { items: [item] });
+await writeJson(backlogFile, { items: [predecessor, item] });
 await writeJson(configFile, { ...spec, acceptanceLedger: 'project/missing-ledger.json' });
 assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'missing terminal authority fails closed');
 await writeJson(configFile, spec);
+assert.equal(await projectRelayNext(root, { queue, task: { ...task, backlogItemId: undefined }, finalJudgement }), null,
+  'unbound predecessor cannot authorize a relay');
+await writeJson(backlogFile, { items: [{ ...predecessor, status: 'ready' }, item] });
+assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null,
+  'a completed task with a stale ready backlog item cannot relay itself');
+await writeJson(backlogFile, { items: [predecessor, item] });
+await writeJson(ledgerFile, null);
+assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'null ledger fails closed');
+await writeJson(ledgerFile, { status: 'unknown' });
+assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'unknown ledger state fails closed');
+await writeJson(ledgerFile, { status: 'in_progress' });
+await unlink(backlogFile);
+assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'missing authoritative backlog fails closed');
+await writeJson(backlogFile, { items: [predecessor, item] });
 const result = await projectRelayNext(root, { queue, task, finalJudgement });
 assert.equal(result.itemId, 'local-1');
 const queued = JSON.parse(await readFile(path.join(root, result.file), 'utf8'));
 assert.equal(queued.projectId, project);
+assert.equal(queued.backlogItemId, item.id);
 assert.equal(queued.source.message_id, 'message-1');
 assert.match(queued.body, /\[project-relay:relay-project\/local-1\]/);
 assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'busy queue must not enqueue twice');

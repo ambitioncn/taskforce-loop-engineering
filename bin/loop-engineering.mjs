@@ -228,6 +228,7 @@ function parseArgs(argv) {
     else if (a === '--source-target') args.sourceTarget = argv[++i];
     else if (a === '--source-account') args.sourceAccount = argv[++i];
     else if (a === '--source-message-id') args.sourceMessageId = argv[++i];
+    else if (a === '--backlog-item-id') args.backlogItemId = argv[++i];
     else if (a === '--source-reply-to') args.sourceReplyTo = argv[++i];
     else if (a === '--progress-notify-command') args.progressNotifyCommand = argv[++i];
     else if (a === '--include-active') args.includeActive = true;
@@ -1637,7 +1638,7 @@ Advanced compatibility commands:
   loop-engineering project-intake --name project --brief "Project brief" [--type auto|web_app|code_project|research|content|ops|qa|knowledge_base|infra_audit|assistant_workflow] [--queue name] [--check "npm test"] [--root <workspace>] [--json]
   loop-engineering project-plan --project project [--root <workspace>] [--json] [--force]
   loop-engineering project-status --project project [--root <workspace>] [--json]
-  loop-engineering enqueue --queue name --title "Title" (--task "Body" | --file task.md) [--root <workspace>]
+  loop-engineering enqueue --queue name --title "Title" (--task "Body" | --file task.md) [--backlog-item-id id] [--root <workspace>]
   loop-engineering route-message --message "User message" [--queue name] [--route --confirm-execute] [--supersede-active | --amend-active] [--source-channel name --source-target id --source-account id --source-message-id id --source-reply-to id] [--root <workspace>] [--json]
   loop-engineering run-queue --config configs/loops/queues/name.json [--progress-notify-command "command"] [--root <workspace>]
   loop-engineering run-queue --queue name --dispatcher "command" [--preflight-config configs/loops/name.json] [--root <workspace>]

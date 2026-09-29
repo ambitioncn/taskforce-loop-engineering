@@ -430,9 +430,12 @@ next local item, opt in with `queues[].autostart: true` and an authoritative
 backlog `items`/`tasks` entry with `status: "ready"`, `autoRun: true`,
 `scope: "local_only"`, `externalActionsAllowed: false`,
 `humanGateRequired: false`, a title, and a task body. The completed predecessor
-must have an explicit `projectId`, full conversation source, and a
-`ready_to_apply` judgement. The project must have a readable non-accepted
-acceptance ledger or terminal contract. The runner enqueues at most one
+must have an explicit `projectId`, `backlogItemId` (use `--backlog-item-id` when
+enqueuing), full conversation source, and a `ready_to_apply` judgement. Its
+bound backlog item must already have an accepted/completed status. The project
+must have a readable acceptance ledger or terminal contract with explicit
+`in_progress` or `ongoing` status, and its configured authoritative backlog
+must be readable. The runner enqueues at most one
 dependency-ready item after the accepted task; duplicate markers, a busy
 queue, human gates, missing authority, or accepted project terminal state stop
 the relay. The existing scheduler executes that queued item on its next tick.
