@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in, source-preserving project backlog relay after accepted scoped tasks; fail closed on external or gated items, missing terminal authority, busy queues, and duplicates.
+
 ## 0.15.19 - 2026-09-19
 
 - Recover OpenClaw dispatcher launches rejected during Gateway restart drain by rotating the runtime session and requeueing the task.

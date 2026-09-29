@@ -425,6 +425,19 @@ loop-engineering project-status --root /path/to/workspace --project launch-site
 Project intake does not enqueue work or run a scheduler by itself. Use the
 generated backlog and existing queue commands when the plan is ready.
 
+For an existing project that should relay from one accepted scoped task to the
+next local item, opt in with `queues[].autostart: true` and an authoritative
+backlog `items`/`tasks` entry with `status: "ready"`, `autoRun: true`,
+`scope: "local_only"`, `externalActionsAllowed: false`,
+`humanGateRequired: false`, a title, and a task body. The completed predecessor
+must have an explicit `projectId`, full conversation source, and a
+`ready_to_apply` judgement. The project must have a readable non-accepted
+acceptance ledger or terminal contract. The runner enqueues at most one
+dependency-ready item after the accepted task; duplicate markers, a busy
+queue, human gates, missing authority, or accepted project terminal state stop
+the relay. The existing scheduler executes that queued item on its next tick.
+The relay does not infer safe work from prose or promote project acceptance.
+
 ## Observability
 
 Use `doctor` for a read-only health view of the loop workspace:
