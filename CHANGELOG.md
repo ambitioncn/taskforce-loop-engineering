@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+## 0.15.21 - 2026-09-30
+
+- Add opt-in reconciliation of mutable project relay backlog statuses against unique accepted done-task evidence, while preserving fail-closed project, backlog, and task-binding checks.
+- Defer internal relay tasks and accept their bound project-relay markers in the OpenClaw route installer.
+
 ## 0.15.20 - 2026-09-29
 
 - Add opt-in, source-preserving project backlog relay after accepted scoped tasks; fail closed on external or gated items, missing terminal authority, busy queues, and duplicates.
 - Require a completed backlog-item binding and explicit in-progress terminal record for relay; reject missing or malformed authoritative backlogs instead of falling back to stale initial data.
-- Add opt-in reconciliation of mutable project relay backlog statuses against unique accepted done-task evidence.
 
 ## 0.15.19 - 2026-09-19
 
