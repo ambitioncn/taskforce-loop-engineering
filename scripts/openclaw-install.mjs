@@ -194,6 +194,11 @@ async function runWhenUnlocked(args, waitMs = 300000) {
 if (command === 'route') {
   const messageIndex = rest.indexOf('--message');
   const message = messageIndex >= 0 ? String(rest[messageIndex + 1] || '') : '';
+  const relayEnqueue = rest.includes('--relay-enqueue');
+  if (relayEnqueue && !/\\[project-(?:relay:[a-zA-Z0-9._-]+\\/[a-zA-Z0-9._-]+|scout:[a-z0-9_-]+)\\]/.test(message)) {
+    console.error('--relay-enqueue requires an internal project relay marker');
+    process.exit(2);
+  }
   const optionValue = (name) => {
     const index = rest.indexOf(name);
     return index >= 0 ? String(rest[index + 1] || '').trim() : '';
@@ -207,8 +212,9 @@ if (command === 'route') {
   }
   const amendment = new RegExp(${JSON.stringify(amendmentPattern)}, 'i').test(message);
   const routeMode = amendment ? '--amend-active' : '--supersede-active';
-  const routeCode = await run(['route-message', '--queue', ${JSON.stringify(queue)}, '--route', '--confirm-execute', routeMode, ...rest]);
-  const queueOnly = new RegExp(${JSON.stringify(queueOnlyPattern)}, 'i').test(message);
+  const routedArgs = rest.filter((arg) => arg !== '--relay-enqueue');
+  const routeCode = await run(['route-message', '--queue', ${JSON.stringify(queue)}, '--route', '--confirm-execute', routeMode, ...routedArgs]);
+  const queueOnly = relayEnqueue || new RegExp(${JSON.stringify(queueOnlyPattern)}, 'i').test(message);
   const runCode = routeCode || queueOnly || amendment ? routeCode : await runWhenUnlocked(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
