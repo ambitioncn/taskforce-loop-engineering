@@ -438,6 +438,16 @@ queue, human gates, missing authority, or accepted project terminal state stop
 the relay. The existing scheduler executes that queued item on its next tick.
 The relay does not infer safe work from prose or promote project acceptance.
 
+Projects with a mutable `backlogSource` may also set
+`relayStatusReconciliation: true`. After an accepted task, Loop changes a
+`ready` local-only relay item to `completed` only when exactly one matching
+same-project task is in the done queue and its persisted final judgement is
+`ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
+external-action tasks leave the source unchanged. Reconciliation is idempotent
+and also runs on subsequent non-plan-only scheduler ticks, so an interrupted
+completion write can recover. It does not change the project acceptance ledger or requirement matrix. Do
+not enable it on an immutable or generated authoritative backlog source.
+
 ## Observability
 
 Use `doctor` for a read-only health view of the loop workspace:
