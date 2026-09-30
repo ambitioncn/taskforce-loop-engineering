@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -205,4 +205,28 @@ const zhInstructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 const zhDispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
 const zhNotifier = await readFile(path.join(root, 'scripts/loops/openclaw-loop-notify.mjs'), 'utf8');
 if (zhQueue.language !== 'zh' || !zhInstructions.includes('Loop Engineering 会话路由') || !zhDispatcher.includes('已经由 Loop Engineering 管理') || !zhNotifier.includes('通知器需要消息参数')) throw new Error('Chinese installation did not localize generated configuration and runtime files');
+const installedWrapper = path.join(root, 'scripts/loops/openclaw-loop.mjs');
+async function routeWithRelayFlag(message) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [installedWrapper, 'route', '--relay-enqueue', '--message', message,
+      '--source-channel', 'feishu', '--source-target', 'owner', '--source-account', 'main',
+      '--source-message-id', 'relay-source-1'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({ code, stderr }));
+  });
+}
+const rejectedRelay = await routeWithRelayFlag('走 loop：普通任务');
+if (rejectedRelay.code !== 2 || !rejectedRelay.stderr.includes('internal project relay marker')) throw new Error('internal enqueue flag accepted an unmarked task');
+const projectRelay = await routeWithRelayFlag('走 loop： [project-relay:relay-project/local-1] 本地任务');
+if (projectRelay.code !== 0) throw new Error(`project relay marker was rejected: ${projectRelay.stderr}`);
+const internalRelay = await routeWithRelayFlag('走 loop： [project-scout:abc123] 本地只读扫描');
+if (internalRelay.code !== 0) throw new Error(`internal relay enqueue failed: ${internalRelay.stderr}`);
+const inboxDir = path.join(root, 'runtime/loops/test-tasks/inbox');
+const queuedFiles = (await readdir(inboxDir)).filter((name) => name.endsWith('.json'));
+if (queuedFiles.length !== 2) throw new Error('internal relays did not defer exactly two tasks to the scheduler');
+const queuedTasks = await Promise.all(queuedFiles.map(async (file) => JSON.parse(await readFile(path.join(inboxDir, file), 'utf8'))));
+if (!queuedTasks.some((task) => task.body.includes('[project-relay:relay-project/local-1]'))
+  || !queuedTasks.some((task) => task.body.includes('[project-scout:abc123]'))
+  || queuedTasks.some((task) => task.body.includes('只入队'))) throw new Error('internal relay corrupted task intent');
 console.log('openclaw installer self-test passed');
