@@ -223,6 +223,16 @@ older managed integrations. Uninstall first disables the timer, then removes
 only clean managed files, units, and that exact instructions block; queue
 runtime is explicitly retained.
 
+The manifest is written before the scheduler is enabled, so an install that
+fails part-way can still be uninstalled. Reinstalling (for example with another
+`--language` or `--queue`) replaces the managed `AGENTS.md` block when it is
+unchanged since the last install; a hand-edited block is only replaced with
+`--force`. The dashboard service is shared by every workspace of a user: an
+install leaves a dashboard that serves another workspace untouched and reports
+it as skipped, uninstall stops and removes the dashboard only when it is still
+the one this installation wrote, and upgrade keeps the recorded
+`--dashboard-listen` mode.
+
 ## Hermes Agent conversation installer
 
 Hermes Agent is supported through a native dispatcher and notifier while the

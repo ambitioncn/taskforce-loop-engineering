@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
-import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { applyManagedInstructions, installDashboardUnlessShared } from './install-shared.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', hermesBin: 'hermes', systemctlBin: 'systemctl', dashboardListen: 'localhost', tailscaleBin: 'tailscale', language: 'auto', json: false, confirmInstall: false, force: false };
@@ -179,13 +180,24 @@ async function main() {
     const contents = { queueConfig: queueContent, dispatcher: dispatcherSource(args), wrapper: wrapperSource({ queue: args.queue, loopBin, language: args.language }), notifier: notifierSource(args), schedulerService: schedulerServiceSource({ root: args.root, queue: args.queue }), schedulerTimer: schedulerTimerSource({ queue: args.queue }) };
     await mkdir(systemdUserDir, { recursive: true });
     for (const [kind, content] of Object.entries(contents)) await writeFile(files[kind], content);
+    // Record ownership before enabling anything, so a later failure still
+    // leaves a manifest describing what was installed.
+    const previousManifest = await readFile(files.manifest, 'utf8').then(JSON.parse).catch(() => null);
+    const managedInstructions = await applyManagedInstructions(files.instructions, instructionsBlock({ queue: args.queue, language: args.language }), {
+      previousBlock: previousManifest?.managedInstructions?.content,
+      force: args.force,
+      startMarker: '<!-- loop-engineering:hermes:start -->',
+      endMarker: '<!-- loop-engineering:hermes:end -->'
+    });
+    const manifest = { version: 3, status: 'installing', platform: 'hermes', language: args.language, installedAt: new Date().toISOString(), root: args.root, queue: args.queue, hermesBin: args.hermesBin, files: Object.entries(contents).map(([kind, content]) => ({ kind, path: files[kind], sha256: sha256(content) })), scheduler: { unit, timer }, managedInstructions: { path: 'AGENTS.md', sha256: sha256(managedInstructions), content: managedInstructions }, dashboard: { listen: args.dashboardListen, tailscaleBin: args.tailscaleBin, installed: false } };
+    const writeManifest = async () => { await mkdir(path.dirname(files.manifest), { recursive: true }); await writeFile(files.manifest, `${JSON.stringify(manifest, null, 2)}\n`); };
+    await writeManifest();
     const reload = await run(args.systemctlBin, ['--user', 'daemon-reload'], { cwd: args.root }); if (reload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(reload.stderr || reload.stdout).trim()}`);
     const enable = await run(args.systemctlBin, ['--user', 'enable', '--now', timer], { cwd: args.root }); if (enable.code !== 0) throw new Error(`Cannot enable Hermes Loop scheduler ${timer}: ${(enable.stderr || enable.stdout).trim()}`);
-    const dashboardInstaller = fileURLToPath(new URL('./dashboard-autostart-install.mjs', import.meta.url));
-    const dashboardInstall = await run(process.execPath, [dashboardInstaller, '--root', args.root, '--listen', args.dashboardListen, '--tailscale-bin', args.tailscaleBin, '--systemctl-bin', args.systemctlBin, '--confirm-install', '--json'], { cwd: args.root });
-    if (dashboardInstall.code !== 0) throw new Error(`Cannot install Dashboard gateway autostart: ${(dashboardInstall.stderr || dashboardInstall.stdout).trim()}`);
-    const marker = instructionsBlock({ queue: args.queue, language: args.language }); const current = await readFile(files.instructions, 'utf8').catch(() => ''); if (!current.includes('<!-- loop-engineering:hermes:start -->')) await appendFile(files.instructions, marker);
-    await mkdir(path.dirname(files.manifest), { recursive: true }); await writeFile(files.manifest, `${JSON.stringify({ version: 2, platform: 'hermes', language: args.language, installedAt: new Date().toISOString(), root: args.root, queue: args.queue, hermesBin: args.hermesBin, files: Object.entries(contents).map(([kind, content]) => ({ kind, path: files[kind], sha256: sha256(content) })), scheduler: { unit, timer } }, null, 2)}\n`);
+    manifest.dashboard = await installDashboardUnlessShared({ root: args.root, listen: args.dashboardListen, tailscaleBin: args.tailscaleBin, systemctlBin: args.systemctlBin, run });
+    if (manifest.dashboard.skipped) report.dashboardAutostart = { ...(report.dashboardAutostart ?? {}), skipped: manifest.dashboard.skipped };
+    manifest.status = 'installed';
+    await writeManifest();
   }
   console.log(args.json ? JSON.stringify(report, null, 2) : text(args.language, `Hermes Loop installer: ${report.status}\nnext: ${args.confirmInstall ? 'Run loop-engineering-hermes-doctor, then route a harmless smoke task.' : 'Review this summary, then rerun with --confirm-install.'}`, `Hermes Loop 安装器：${report.status}\n下一步：${args.confirmInstall ? '运行 loop-engineering-hermes-doctor，然后路由一个无害的冒烟任务。' : '检查此摘要，然后使用 --confirm-install 重新运行。'}`));
 }

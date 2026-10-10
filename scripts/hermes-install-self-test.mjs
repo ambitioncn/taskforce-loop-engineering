@@ -43,4 +43,11 @@ const verify = await run('systemd-analyze', ['verify', serviceFile, timerFile]);
 const doctorResult = await run(process.execPath, [doctor, '--root', root, '--queue', 'hermes-tasks', '--hermes-bin', mockHermes, '--json']); if (doctorResult.code !== 0 || JSON.parse(doctorResult.stdout).status !== 'ok') throw new Error(`Hermes doctor failed: ${doctorResult.stderr || doctorResult.stdout}`);
 const smokeResult = await run(process.execPath, [smoke, '--root', root, '--queue', 'hermes-tasks', '--hermes-bin', mockHermes, '--loop-bin', loopBin, '--json']); if (smokeResult.code !== 0 || JSON.parse(smokeResult.stdout).status !== 'ok') throw new Error(`Hermes smoke failed: ${smokeResult.stderr || smokeResult.stdout}`);
 const calls = await readFile(systemctlCapture, 'utf8'); if (!calls.includes('["--user","enable","--now","hermes-loop-hermes-tasks-scheduler.timer"]')) throw new Error('Hermes scheduler timer was not enabled');
+// Reinstalling in another language replaces the managed AGENTS.md block.
+const reinstall = await run(process.execPath, [installer, ...base, '--language', 'zh', '--confirm-install', '--force', '--json']);
+if (reinstall.code !== 0) throw new Error(`Hermes reinstall failed: ${reinstall.stderr}`);
+const hermesInstructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
+if (hermesInstructions.split('<!-- loop-engineering:hermes:start -->').length !== 2 || !hermesInstructions.includes('Loop Engineering 会话路由（Hermes）') || hermesInstructions.includes('conversation routing (Hermes)')) throw new Error('Hermes reinstall did not replace the managed AGENTS.md block');
+const hermesManifest = JSON.parse(await readFile(path.join(root, 'runtime/loop-engineering-hermes-install.json'), 'utf8'));
+if ((hermesManifest.status !== 'installed' || hermesManifest.managedInstructions?.content !== hermesInstructions.slice(hermesInstructions.indexOf('\n<!-- loop-engineering:hermes:start -->')))) throw new Error('Hermes manifest does not record the managed block');
 console.log('hermes installer self-test passed');
