@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { appendFile, utimes as touch } from 'node:fs/promises';
+import { claimAction, reserveAction, settleAction } from '../lib/action-reservations.mjs';
+import { DurableJournal } from '../lib/durable-journal.mjs';
+import { TransactionalStateKernel } from '../lib/transactional-state-kernel.mjs';
 import { enqueueTask, ensureQueueDirs, queueCancel, queueRequeue, runCommand, runQueueOnce, queueStatus } from '../lib/core.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -183,6 +188,58 @@ try {
     await runQueueOnce(root, { queue, dispatcher: `echo "$LOOP_TASK_ID rerun" >> ${JSON.stringify(log)}` });
     assert.equal((await executions()).includes(`${victim.task.id} rerun`), true, 'a requeued task runs despite an old stop marker');
     assert.equal((await queueStatus(root, queue)).active, 0);
+  }
+
+  // Control-plane primitives: one idempotency key, one request; fenced and
+  // zero-or-one kernel effects; a journal that survives torn and concurrent
+  // appends.
+  {
+    const root = await tempRoot('primitives');
+    for (let trial = 0; trial < 10; trial += 1) {
+      const key = `charge:${trial}`;
+      // A mutex left behind by a crashed process is what several waiters
+      // used to break simultaneously.
+      const crashedLock = path.join(root, 'runtime/loops/action-reservations', `${createHash('sha256').update(key).digest('hex')}.lock`);
+      await mkdir(crashedLock, { recursive: true });
+      const old = new Date(Date.now() - 60000);
+      await touch(crashedLock, old, old);
+      const results = await Promise.allSettled(Array.from({ length: 8 }, (_, amount) =>
+        reserveAction(root, { idempotencyKey: key, kind: 'paid_api', authorizationScope: 'scope', request: { amount } })));
+      assert.equal(results.filter((entry) => entry.status === 'fulfilled' && entry.value.created === true).length, 1, 'one key is granted to one request');
+    }
+    await reserveAction(root, { idempotencyKey: 'late', kind: 'paid_api', authorizationScope: 'scope', request: { amount: 1 } });
+    const claim = await claimAction(root, { idempotencyKey: 'late', owner: 'w', leaseMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const late = await settleAction(root, { idempotencyKey: 'late', fencingToken: claim.fencingToken, evidence: 'upstream-1' });
+    assert.equal(late.settled, false); assert.equal(late.record.state, 'unknown', 'a settle after lease expiry needs reconciliation');
+    assert.equal(late.record.reconciliation.late_report.evidence, 'upstream-1');
+
+    const kernel = new TransactionalStateKernel(path.join(root, 'kernel'));
+    const a = await kernel.acquire(); await kernel.release(a);
+    const b = await kernel.acquire();
+    assert.notEqual(a.fencingToken, b.fencingToken);
+    await assert.rejects(() => kernel.transact({ lease: a, effects: [{ type: 'state_transition', key: 'stale', payload: {} }] }), /Stale fencing token/);
+    await kernel.transact({ lease: b, effects: [{ type: 'state_transition', key: 'fresh', payload: {} }] });
+    await kernel.release(b);
+    let executions = 0;
+    const effect = { type: 'external_action', key: 'charge-42', payload: { amount: 100 } };
+    await Promise.all([1, 2, 3].map(() => kernel.replayEffect(effect, async () => { executions += 1; await new Promise((resolve) => setTimeout(resolve, 20)); return 'charged'; })));
+    assert.equal(executions, 1, 'concurrent replayEffect executes once');
+    const crashing = { type: 'external_action', key: 'crash-1', payload: {} };
+    await assert.rejects(() => kernel.replayEffect(crashing, async () => { throw new Error('crashed after upstream accepted'); }));
+    assert.equal((await kernel.replayEffect(crashing, async () => { executions += 1; })).reconcileRequired, true, 'an interrupted effect is not re-run');
+    assert.equal(executions, 1);
+    await kernel.reconcileEffect(crashing, { executed: true, outcome: 'accepted' });
+    assert.equal((await kernel.replayEffect(crashing, async () => { executions += 1; })).replayed, true);
+    assert.equal((await kernel.verifyReceiptChain()).ok, true);
+
+    const journal = new DurableJournal(path.join(root, 'journal'));
+    await journal.append('a', 1);
+    await Promise.all(['b', 'c', 'd'].map((type, index) => journal.append(type, index)));
+    assert.equal((await journal.replay()).count, 4, 'concurrent appends keep the chain valid');
+    await appendFile(journal.logFile, '{"version":1,"transactionId":"x","ty');
+    await journal.append('e', 5);
+    assert.equal((await journal.replay()).count, 5, 'a torn tail is discarded, not buried');
   }
 
   console.log('safety regression self-test passed');
