@@ -48,6 +48,27 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
 }
 
 {
+  // Successful answers can legitimately mention runtime failure vocabulary.
+  // Free-text signatures must not turn exitCode=0 into a replayed task.
+  for (const stdout of [
+    'Done. Added rate limit middleware and tests pass.',
+    'Fixed the connection reset bug in client.js.',
+    'Handled socket hang up and network error retries.',
+    'Documented what happens when compaction timed out or transcript compaction failed.',
+    'Explained the "stopped before confirming the turn was complete" message.'
+  ]) {
+    const classification = dispatchFailureClassification({ exitCode: 0, timedOut: false, stderr: '', stdout });
+    assert.equal(classification.category, 'ok', stdout);
+    assert.equal(classification.recoverableRuntime, undefined, stdout);
+  }
+  for (const [stderr, category] of [['429 rate limit exceeded', 'rate_limit'], ['read ECONNRESET: connection reset', 'transport_error']]) {
+    const classification = dispatchFailureClassification({ exitCode: 1, timedOut: false, stderr, stdout: '' });
+    assert.equal(classification.category, category);
+    assert.equal(classification.recoverableRuntime, true);
+  }
+}
+
+{
   const classification = dispatchFailureClassification({
     exitCode: 0,
     timedOut: false,

@@ -105,4 +105,34 @@ await rm(path.join(root, result.file));
 const tick = await queueSchedulerTick(root, { queue });
 assert.deepEqual(tick.relayReconciliation, [{ project, changed: 1 }], 'idle scheduler repairs interrupted status writes');
 assert.equal((await readFile(backlogFile, 'utf8')).includes('"status": "completed"'), true);
+// A relay item that needed a revision round is still reconcilable through
+// its lineage: the revision body has no leading marker, but its revisionOf
+// chain ends at the bound relay task.
+const revisedItem = { ...item, id: 'local-2' };
+const doneDir = path.join(root, 'runtime/loops', queue, 'done');
+const judgementFor = (id) => path.join(root, 'runtime/loops', queue, 'tasks', id, 'final_judgement.json');
+const relayRootTask = { ...queued, id: 'relay-root', backlogItemId: revisedItem.id, status: 'completed',
+  body: `[project-relay:${project}/${revisedItem.id}]\nVerify the local entry` };
+const revisionTask = { ...relayRootTask, id: 'relay-revision', revisionOf: relayRootTask.id, revisionRound: 1,
+  body: `Revision round for a loop-managed task.\n\nOriginal task body:\n${relayRootTask.body}` };
+await writeJson(backlogFile, { items: [revisedItem] });
+await writeJson(path.join(doneDir, `${relayRootTask.id}.json`), relayRootTask);
+await writeJson(judgementFor(relayRootTask.id), { outcome: 'needs_revision', requires_human_gate: false });
+await writeJson(path.join(doneDir, `${revisionTask.id}.json`), revisionTask);
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0, 'a lineage without an accepted round is not evidence');
+await writeJson(judgementFor(revisionTask.id), { outcome: 'ready_to_apply', requires_human_gate: true });
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0, 'a gated revision is not evidence');
+await writeJson(path.join(doneDir, `${revisionTask.id}.json`), { ...revisionTask, revisionOf: 'unknown-task' });
+await writeJson(judgementFor(revisionTask.id), { outcome: 'ready_to_apply', requires_human_gate: false });
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0, 'a revision without a relay root is not evidence');
+await writeJson(path.join(doneDir, `${relayRootTask.id}.json`), { ...relayRootTask, backlogItemId: 'other-item' });
+await writeJson(path.join(doneDir, `${revisionTask.id}.json`), revisionTask);
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0, 'a lineage with a different binding is not evidence');
+await writeJson(path.join(doneDir, `${relayRootTask.id}.json`), relayRootTask);
+await writeJson(path.join(doneDir, 'second-root.json'), { ...relayRootTask, id: 'second-root' });
+await writeJson(judgementFor('second-root'), { outcome: 'needs_revision', requires_human_gate: false });
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0, 'two independent relay lineages fail closed');
+await unlink(path.join(doneDir, 'second-root.json'));
+assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 1, 'an accepted revision round completes its relay item');
+assert.equal(JSON.parse(await readFile(backlogFile, 'utf8')).items[0].status, 'completed');
 console.log('project relay self-test passed');

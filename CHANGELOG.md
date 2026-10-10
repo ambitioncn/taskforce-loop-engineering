@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Stop classifying successful (exit 0) dispatches as recoverable runtime interruptions when the answer merely mentions free-text failure vocabulary such as "rate limit" or "connection reset"; only structured runtime trailers may override a zero exit, so completed work is no longer replayed.
+- Let relay status reconciliation follow a relay task's revision lineage, so an item accepted after a revision round is completed instead of stalling the relay; independent duplicate lineages and lineages without exactly one accepted round still fail closed.
+
 ## 0.15.21 - 2026-09-30
 
 - Add opt-in reconciliation of mutable project relay backlog statuses against unique accepted done-task evidence, while preserving fail-closed project, backlog, and task-binding checks.

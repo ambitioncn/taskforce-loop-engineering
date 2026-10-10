@@ -444,8 +444,9 @@ The relay does not infer safe work from prose or promote project acceptance.
 Projects with a mutable `backlogSource` may also set
 `relayStatusReconciliation: true`. After an accepted task, Loop changes a
 `ready` local-only relay item to `completed` only when exactly one matching
-same-project task is in the done queue and its persisted final judgement is
-`ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
+same-project relay lineage (the relay task plus any `revisionOf` revision
+rounds bound to the same item) is in the done queue and exactly one of its
+persisted final judgements is `ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
 external-action tasks leave the source unchanged. Reconciliation is idempotent
 and also runs on subsequent non-plan-only scheduler ticks, so an interrupted
 completion write can recover. It does not change the project acceptance ledger or requirement matrix. Do
