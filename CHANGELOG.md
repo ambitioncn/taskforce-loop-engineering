@@ -2,19 +2,30 @@
 
 ## Unreleased
 
-- **Security:** Dashboard Human Gate commands now require an operator token (`dashboard-operator-add` / `dashboard-operator-remove`); the acting identity comes from the token instead of the request body, requests must be `application/json`, and loopback dashboards reject foreign `Host` headers (DNS rebinding). Gate evidence served by `/api/v1/gates` is redacted, and redaction now recognises camelCase keys such as `accessToken` and `Authorization` while keeping `fencing_token` visible. Without a registered operator, dashboard gate commands are disabled.
-- **Security:** Reject task ids that are not plain identifiers in every `--task-id` lookup, so `queue-cancel`, `queue-requeue` and review decisions cannot move or delete files outside the queue.
-- **Data loss:** `code-worktree-export` writes the complete patch, including untracked files as new-file diffs, instead of the last 60,000 characters; cleanup force-removes a dirty worktree only when its export manifest is complete and the worktree still matches it. Older exports must be re-exported before cleanup.
-- **Installers:** systemd units now write `WorkingDirectory=` as the literal path (systemd does not decode escapes there), so scheduler and dashboard services start for workspaces whose path contains spaces or non-ASCII characters; the dashboard installer escapes `ExecStart=` by UTF-8 byte like the others. Installers, manage and smoke scripts resolve their own files with `fileURLToPath`, so a package installed under a path with spaces works.
-- **Installers:** the OpenClaw and Hermes manifests are written before the scheduler is enabled, so a failed install is still uninstallable; reinstalling replaces an unchanged managed `AGENTS.md` block (a hand-edited one only with `--force`) and keeps the manifest consistent, so language or queue changes no longer block uninstall. OpenClaw uninstall stops and removes the dashboard service and gateway drop-ins it installed, upgrade keeps the recorded dashboard listen mode, and installers no longer repoint a dashboard that serves another workspace (`dashboard-autostart-install --force` overrides).
-- Requeued worktree tasks continue in their existing branch and worktree instead of failing with "branch already exists", so runtime recovery and project continuation work in code queues.
-- Project inference matches project names as whole tokens ("ui" no longer matches "build"), `json-value` checks compare JSON independent of key order, and applying the same revision plan (or `queue-revision-next`) twice no longer enqueues a duplicate revision without `--force`.
-- A handoff packet expires when its todo is recovered, so a stale accept can no longer reclaim a recovered or completed todo; the quota ledger serializes spend so concurrent slices are not lost.
-- Redaction is shared (`lib/redaction.mjs`) by evidence, execution ledger and dashboard: camelCase credentials are redacted, `fencing_token` and token counters stay visible. Evidence sealing recomputes `passed` from thresholds, scenarios and compatibility, and supports an HMAC seal via `LOOP_EVIDENCE_HMAC_KEY`; the unkeyed SHA-256 seal is documented as corruption detection only.
-- Card-bound chat replies must name the generation they answer (`/approve gate_x@2`); each card button lists its `reply_command`, and a reply without one returns `generation_required` instead of always failing as stale.
-- CLI flags now reject a missing value, a value that is the next flag, and non-integer numbers (`--timeout-ms 10m`). `run-loop-cron.sh` logs and alerts on an unreadable config and accepts an alert command with arguments. Patch headers with git-quoted non-ASCII paths are parsed, so the dirty-target check covers them. Removed the nonexistent `main` entry from `package.json`; CI runs adapter, production-trust and pack checks instead of repeating the competitive check.
+## 0.16.0 - 2026-10-10
+
+### Upgrade notes
+
+This release changes several behaviours on purpose; see `MIGRATING.md`.
+
+- Dashboard Human Gate buttons need an operator token: run `loop-engineering dashboard-operator-add --actor-id <id>` and enter the printed token in the dashboard. Without a registered operator the dashboard is browse-only.
+- Chat replies to a gate card must include the generation, e.g. `/approve gate_x@2`; cards show the exact `reply_command`.
+- Patch exports made by earlier versions must be re-exported before `code-worktree-cleanup` removes a dirty worktree.
+- CLI flags reject missing values and non-integer numbers (`--timeout-ms 10m` is now an error, not 10 ms).
+- Evidence `passed` is recomputed from thresholds, scenarios and compatibility; set `LOOP_EVIDENCE_HMAC_KEY` for a tamper-resistant seal.
+- Re-run `loop-engineering-openclaw-manage --action upgrade --confirm-upgrade` (Hermes: rerun the installer with `--confirm-install --force`) so generated workspace files and units pick up the installer fixes.
+
+### Security and data loss
+
+- Dashboard Human Gate commands now require an operator token (`dashboard-operator-add` / `dashboard-operator-remove`); the acting identity comes from the token instead of the request body, requests must be `application/json`, and loopback dashboards reject foreign `Host` headers (DNS rebinding). Gate evidence served by `/api/v1/gates` is redacted, and redaction now recognises camelCase keys such as `accessToken` and `Authorization` while keeping `fencing_token` visible. Without a registered operator, dashboard gate commands are disabled.
+- Reject task ids that are not plain identifiers in every `--task-id` lookup, so `queue-cancel`, `queue-requeue` and review decisions cannot move or delete files outside the queue.
+- `code-worktree-export` writes the complete patch, including untracked files as new-file diffs, instead of the last 60,000 characters; cleanup force-removes a dirty worktree only when its export manifest is complete and the worktree still matches it. Older exports must be re-exported before cleanup.
 - Keep Human Gates for tasks outside any project waiting instead of cancelling them as `project_not_found` on the next status or run.
-- **Exactly-once queue execution:** the runner renews its queue lease while a task runs, stale-lock reclaim is serialized so two runners cannot both take the lock, and a stale active copy of a task that already finished is quarantined instead of re-executed. Orphan recovery stops after `retry.orphanRecoveryMaxAttempts` (default 3) and moves the task to `failed/` as `orphan_recovery_exhausted`.
+
+### Exactly-once execution and crash safety
+
+- Stop classifying successful (exit 0) dispatches as recoverable runtime interruptions when the answer merely mentions free-text failure vocabulary such as "rate limit" or "connection reset"; only structured runtime trailers may override a zero exit, so completed work is no longer replayed.
+- Exactly-once queue execution: the runner renews its queue lease while a task runs, stale-lock reclaim is serialized so two runners cannot both take the lock, and a stale active copy of a task that already finished is quarantined instead of re-executed. Orphan recovery stops after `retry.orphanRecoveryMaxAttempts` (default 3) and moves the task to `failed/` as `orphan_recovery_exhausted`.
 - Canceling, parking or requeueing an active task now stops its dispatcher, and the runner no longer writes a second copy of a task an operator moved; a requeued or resumed task ignores supersede markers written before it was restarted. Amending a task that has just finished no longer recreates it in `active/`.
 - Queue files are written atomically; an unreadable lock is reclaimed after a grace period and unreadable queued or active task files are moved to `quarantine/` instead of blocking the queue. Concurrent enqueues with the same title get distinct ids instead of overwriting each other.
 - Action reservations, the todo control plane, the execution ledger and the durable journal share a token-owned file mutex (`lib/file-mutex.mjs`): stale locks are reclaimed under a second guard and only the owner releases a lock, so concurrent waiters can no longer both enter and grant one idempotency key to two requests. A settle or release reported after the claim's lease expired now becomes an `unknown` outcome for reconciliation, keeping the worker's evidence.
@@ -22,13 +33,28 @@
 - `DurableJournal` serializes appends and discards a torn final line before appending, so a crash mid-write or concurrent appends no longer corrupt the chain permanently.
 - Spawn failures (missing working directory, NUL bytes) become failed commands instead of crashing the runner, and the completion notification strips NUL bytes and records its result.
 - Decode command output as UTF-8 across chunk boundaries so multi-byte text in patches and logs is not corrupted.
+- Requeued worktree tasks continue in their existing branch and worktree instead of failing with "branch already exists", so runtime recovery and project continuation work in code queues.
+- A handoff packet expires when its todo is recovered, so a stale accept can no longer reclaim a recovered or completed todo; the quota ledger serializes spend so concurrent slices are not lost.
 
-- Stop classifying successful (exit 0) dispatches as recoverable runtime interruptions when the answer merely mentions free-text failure vocabulary such as "rate limit" or "connection reset"; only structured runtime trailers may override a zero exit, so completed work is no longer replayed.
+### Project relay
+
 - Let relay status reconciliation follow a relay task's revision lineage, so an item accepted after a revision round is completed instead of stalling the relay; independent duplicate lineages and lineages without exactly one accepted round still fail closed.
 - Run scheduler relay maintenance only while holding the queue lock with no active task, and abandon a reconciliation write when the backlog changed after it was read, so concurrent agent edits are never overwritten.
 - Retry a relay that was skipped because the queue was busy on a later idle scheduler tick, under the same fail-closed checks, only when the most recently enqueued backlog-bound task is completed and accepted, so a failed or canceled relay task still stops the chain; report it as `projectRelay` with `relayMaintenance` status.
 - Skip the scheduler's relay scan when a cheap fingerprint of queue state and project relay files is unchanged, with an hourly full pass for in-place edits, and read each task file once per pass; an unreadable task file reports `relayMaintenance: "error"` instead of failing the tick.
 - Treat duplicate or malformed backlog rows as unusable for relay predecessors, dependencies, and candidates instead of letting the last duplicate win.
+
+### Installers
+
+- systemd units now write `WorkingDirectory=` as the literal path (systemd does not decode escapes there), so scheduler and dashboard services start for workspaces whose path contains spaces or non-ASCII characters; the dashboard installer escapes `ExecStart=` by UTF-8 byte like the others. Installers, manage and smoke scripts resolve their own files with `fileURLToPath`, so a package installed under a path with spaces works.
+- the OpenClaw and Hermes manifests are written before the scheduler is enabled, so a failed install is still uninstallable; reinstalling replaces an unchanged managed `AGENTS.md` block (a hand-edited one only with `--force`) and keeps the manifest consistent, so language or queue changes no longer block uninstall. OpenClaw uninstall stops and removes the dashboard service and gateway drop-ins it installed, upgrade keeps the recorded dashboard listen mode, and installers no longer repoint a dashboard that serves another workspace (`dashboard-autostart-install --force` overrides).
+
+### Other fixes
+
+- Project inference matches project names as whole tokens ("ui" no longer matches "build"), `json-value` checks compare JSON independent of key order, and applying the same revision plan (or `queue-revision-next`) twice no longer enqueues a duplicate revision without `--force`.
+- Redaction is shared (`lib/redaction.mjs`) by evidence, execution ledger and dashboard: camelCase credentials are redacted, `fencing_token` and token counters stay visible. Evidence sealing recomputes `passed` from thresholds, scenarios and compatibility, and supports an HMAC seal via `LOOP_EVIDENCE_HMAC_KEY`; the unkeyed SHA-256 seal is documented as corruption detection only.
+- Card-bound chat replies must name the generation they answer (`/approve gate_x@2`); each card button lists its `reply_command`, and a reply without one returns `generation_required` instead of always failing as stale.
+- CLI flags now reject a missing value, a value that is the next flag, and non-integer numbers (`--timeout-ms 10m`). `run-loop-cron.sh` logs and alerts on an unreadable config and accepts an alert command with arguments. Patch headers with git-quoted non-ASCII paths are parsed, so the dirty-target check covers them. Removed the nonexistent `main` entry from `package.json`; CI runs adapter, production-trust and pack checks instead of repeating the competitive check.
 
 ## 0.15.21 - 2026-09-30
 

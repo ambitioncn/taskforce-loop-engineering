@@ -1,3 +1,83 @@
+# Migrating to Taskforce Loop Engineering 0.16.0
+
+0.16.0 is a correctness and security release. No artifact rewrite is needed:
+queue, project, reservation, journal and kernel files written by 0.15.x are read
+in place. A few behaviours change on purpose.
+
+## Upgrade steps
+
+```bash
+npm install -g taskforce-loop-engineering@0.16.0
+# OpenClaw workspaces
+loop-engineering-openclaw-manage --root /path/to/workspace --action upgrade-plan
+loop-engineering-openclaw-manage --root /path/to/workspace --action upgrade --confirm-upgrade
+# Hermes workspaces
+loop-engineering-hermes-install --root /path/to/workspace --confirm-install --force
+```
+
+Upgrading regenerates the scheduler unit with a literal `WorkingDirectory=`, so
+workspaces whose path contains spaces or non-ASCII characters start correctly.
+An upgrade keeps the recorded `--dashboard-listen` mode. If the per-user
+dashboard already serves another workspace, the installer now leaves it alone
+and reports `dashboardAutostart.skipped`.
+
+## Dashboard Human Gate decisions need an operator token
+
+`POST /api/v1/gate-commands` previously accepted any caller and trusted the
+`actor_id` in the request. It now requires a registered operator:
+
+```bash
+loop-engineering dashboard-operator-add --actor-id alice --root /path/to/workspace
+```
+
+Enter the printed token in the dashboard's "Operator token" field (it is shown
+once; only its SHA-256 digest is stored in `configs/loops/dashboard-operators.json`).
+The gate's `allowed_actors` must contain that actor id. Remove access with
+`dashboard-operator-remove`. Until an operator exists, the dashboard is
+browse-only. Loopback dashboards also reject requests whose `Host` is not
+`127.0.0.1`, `localhost` or `[::1]`; add other names with `--allowed-host`.
+
+## Chat replies name the gate generation
+
+Card-bound replies must now be `/approve gate_<id>@<generation>`,
+`/reject gate_<id>@<generation>` or
+`/request_revision gate_<id>@<generation> <reason>`. Cards include the exact
+`reply_command` for each button. A reply without a generation returns
+`generation_required` instead of being applied to whatever generation is
+current.
+
+## Code worktree cleanup needs a complete export
+
+`code-worktree-export` now writes the full patch including untracked files and
+records `complete` and `contentSha256` in its manifest. Cleanup of a dirty
+worktree refuses exports from earlier versions
+(`dirty_export_incomplete_reexport_required`) and worktrees changed after the
+export (`dirty_worktree_changed_since_export`). Re-export with `--force`, then
+clean up.
+
+## Stricter CLI values
+
+A flag followed by nothing or by another flag (`--title --task x`) and
+non-integer numeric values (`--timeout-ms 10m`, `--limit abc`) are now errors.
+Scripts that relied on the old lenient parsing must pass explicit values.
+
+## Evidence and redaction
+
+`sealEvidence` recomputes `passed` from thresholds, scenarios and compatibility,
+so a report whose metrics fail cannot be sealed as passed. The default seal is a
+plain SHA-256 digest that detects corruption only; set `LOOP_EVIDENCE_HMAC_KEY`
+(or pass `{ key }`) for an HMAC seal, and supply the same key when verifying.
+Redaction now also covers camelCase credentials such as `accessToken` and
+`Authorization`, while `fencing_token` and token counters stay visible.
+
+## Queue runtime
+
+The runner renews its lease, so `leaseMs` no longer needs headroom for the
+longest possible run. Orphaned active tasks are recovered at most
+`retry.orphanRecoveryMaxAttempts` times (default 3) and then moved to `failed/`
+as `orphan_recovery_exhausted`. Unreadable task files are moved to
+`runtime/loops/<queue>/quarantine/` for inspection instead of blocking the queue.
+
 # Migrating to Taskforce Loop Engineering 0.12.0
 
 ## Goal API and primary CLI
