@@ -37,9 +37,9 @@ offline and fixture-only: it performs no model call or external side effect.
 Copy `templates/github-production-trust.yml` into `.github/workflows/` only
 when publication is separately approved.
 
-## Read-only operator dashboard (P3)
+## Operator dashboard (P3)
 
-Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or `dashboard-serve`. Gateway autostart installation supports local-only and Tailnet-only listening without binding all interfaces. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.
+Version 0.12 adds a dependency-free operator projection over projects, queues, P0 gates, P1 action reservations and P2 typed todo ownership. Use `dashboard-inspect`, `dashboard-health`, `dashboard-export`, or `dashboard-serve`. Gateway autostart installation supports local-only and Tailnet-only listening without binding all interfaces. Human Gate decisions from the dashboard require an operator token from `dashboard-operator-add`. See [docs/operator-dashboard.md](docs/operator-dashboard.md) for API, security and schema details.
 
 The consolidated P0-P3 local release contract and evidence ledger are recorded in [docs/release-0.12-acceptance.md](docs/release-0.12-acceptance.md). Publishing, tagging, pushing, and production installation remain separate release actions.
 
@@ -222,6 +222,16 @@ managed content was edited. Upgrade installs and enables the scheduler for
 older managed integrations. Uninstall first disables the timer, then removes
 only clean managed files, units, and that exact instructions block; queue
 runtime is explicitly retained.
+
+The manifest is written before the scheduler is enabled, so an install that
+fails part-way can still be uninstalled. Reinstalling (for example with another
+`--language` or `--queue`) replaces the managed `AGENTS.md` block when it is
+unchanged since the last install; a hand-edited block is only replaced with
+`--force`. The dashboard service is shared by every workspace of a user: an
+install leaves a dashboard that serves another workspace untouched and reports
+it as skipped, uninstall stops and removes the dashboard only when it is still
+the one this installation wrote, and upgrade keeps the recorded
+`--dashboard-listen` mode.
 
 ## Hermes Agent conversation installer
 
@@ -439,16 +449,33 @@ must be readable. The runner enqueues at most one
 dependency-ready item after the accepted task; duplicate markers, a busy
 queue, human gates, missing authority, or accepted project terminal state stop
 the relay. The existing scheduler executes that queued item on its next tick.
+If the queue was busy when the task was accepted, a later non-plan-only
+scheduler tick that holds the queue lock with no active task retries the relay,
+under the same checks, when the most recently enqueued backlog-bound task is
+completed and accepted. A failed or canceled relay task stops the chain until a
+person acts on it.
+To keep idle ticks cheap, this relay maintenance runs a full scan only when a
+fingerprint changes: task file names in each queue state directory, the
+project spec, and the size and modification time of its backlog and acceptance
+files. A full pass also runs at least hourly (`relayMaintenanceFullIntervalMs`)
+to pick up in-place edits the fingerprint cannot see, such as a rewritten final
+judgement; skipping a pass can only delay a relay, never act on stale state.
+The tick reports `relayMaintenance` as `completed`, `unchanged`, `error`,
+`queue_locked`, `queue_active`, or `not_configured`. Backlog rows
+with duplicate ids can neither satisfy a predecessor or dependency nor be relayed.
 The relay does not infer safe work from prose or promote project acceptance.
 
 Projects with a mutable `backlogSource` may also set
 `relayStatusReconciliation: true`. After an accepted task, Loop changes a
 `ready` local-only relay item to `completed` only when exactly one matching
-same-project task is in the done queue and its persisted final judgement is
-`ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
+same-project relay lineage (the relay task plus any `revisionOf` revision
+rounds bound to the same item) is in the done queue and exactly one of its
+persisted final judgements is `ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
 external-action tasks leave the source unchanged. Reconciliation is idempotent
-and also runs on subsequent non-plan-only scheduler ticks, so an interrupted
-completion write can recover. It does not change the project acceptance ledger or requirement matrix. Do
+and also runs on subsequent non-plan-only scheduler ticks that hold the queue
+lock with no active task, so an interrupted completion write can recover. If
+the backlog changes after reconciliation reads it, the write is abandoned
+(`conflict: true`) instead of overwriting the newer version. It does not change the project acceptance ledger or requirement matrix. Do
 not enable it on an immutable or generated authoritative backlog source.
 
 ## Observability
@@ -502,8 +529,10 @@ LOOP_WORKDIR=/path/to/workspace \
   run-loop-cron.sh configs/loops/workspace-health.json
 ```
 
-Set `LOOP_ALERT_COMMAND` to a command that accepts one message argument when
-you want non-zero loop exits to notify a channel.
+Set `LOOP_ALERT_COMMAND` to a command (it may include its own arguments, for
+example `openclaw message send --target ops`) when you want non-zero loop exits
+or an unreadable config to notify a channel; the message is appended as one
+final argument. A failing alert command is recorded in the cron log.
 
 ## Queue Runner
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -46,7 +47,7 @@ async function main() {
   const baseConfig = path.join(args.root, `configs/loops/queues/${args.queue}.json`);
   const smokeConfig = path.join(args.root, `configs/loops/queues/${smokeQueue}.json`);
   const smokeRuntime = path.join(args.root, 'runtime', 'loops', smokeQueue);
-  const doctorScript = new URL('./openclaw-doctor.mjs', import.meta.url).pathname;
+  const doctorScript = fileURLToPath(new URL('./openclaw-doctor.mjs', import.meta.url));
   const steps = [];
   let taskId = null;
   try {

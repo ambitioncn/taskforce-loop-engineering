@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -54,7 +55,20 @@ async function main() {
   const block = manifest.managedInstructions?.content || '';
   const instructionsClean = Boolean(block) && sha256(block) === manifest.managedInstructions?.sha256 && agentsText.includes(block);
   const modified = [...files.filter((item) => item.present && !item.clean).map((item) => item.path), ...units.filter((item) => item.present && !item.clean).map((item) => item.path)];
-  const plan = { version: 2, action: args.action, readOnly: args.action.endsWith('-plan'), queue: manifest.queue, workerAgent: manifest.workerAgent, files, units, instructionsClean, modified, retained: manifest.retainedOnUninstall || [], ready: modified.length === 0 && instructionsClean };
+  // The per-user dashboard is removed only while it is exactly what this
+  // installation wrote; otherwise another workspace or a person now owns it.
+  const dashboardFiles = [];
+  if (manifest.dashboard?.installed && manifest.dashboard.service) {
+    const service = await readFile(manifest.dashboard.service, 'utf8').catch(() => null);
+    dashboardFiles.push({ path: manifest.dashboard.service, present: service !== null, clean: service !== null && sha256(service) === manifest.dashboard.serviceSha256 });
+    for (const dropIn of manifest.dashboard.dropIns ?? []) {
+      const content = await readFile(dropIn, 'utf8').catch(() => null);
+      dashboardFiles.push({ path: dropIn, present: content !== null, clean: content !== null && sha256(content) === manifest.dashboard.dropInSha256 });
+    }
+  }
+  const dashboardOwned = dashboardFiles.length > 0 && dashboardFiles[0].clean;
+  const retained = [...(manifest.retainedOnUninstall || []), ...(dashboardFiles.length && !dashboardOwned ? [`${manifest.dashboard.service} (changed since install)`] : [])];
+  const plan = { version: 3, action: args.action, readOnly: args.action.endsWith('-plan'), installStatus: manifest.status ?? 'installed', queue: manifest.queue, workerAgent: manifest.workerAgent, files, units, dashboard: dashboardFiles, instructionsClean, modified, retained, ready: modified.length === 0 && instructionsClean };
   if (args.action === 'uninstall') {
     if (!plan.ready) throw new Error(`Refusing uninstall because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
     const timer = units.find((item) => item.unit?.endsWith('.timer'));
@@ -64,6 +78,11 @@ async function main() {
     }
     for (const item of files) if (item.present && item.clean) await rm(path.join(args.root, item.path), { force: true });
     for (const item of units) if (item.present && item.clean) await rm(item.path, { force: true });
+    if (dashboardOwned) {
+      const stopped = await run(manifest.systemctlBin || 'systemctl', ['--user', 'stop', manifest.dashboard.unit || 'loop-engineering-dashboard.service'], args.root);
+      if (stopped.code !== 0) throw new Error(`Cannot stop the Dashboard service: ${stopped.stderr || stopped.stdout}`);
+      for (const item of dashboardFiles) if (item.present && item.clean) await rm(item.path, { force: true });
+    }
     const reload = await run(manifest.systemctlBin || 'systemctl', ['--user', 'daemon-reload'], args.root);
     if (reload.code !== 0) throw new Error(`Cannot reload user systemd units: ${reload.stderr || reload.stdout}`);
     await writeFile(agentsFile, agentsText.replace(block, ''));
@@ -71,9 +90,9 @@ async function main() {
     plan.status = 'uninstalled'; plan.readOnly = false;
   } else if (args.action === 'upgrade') {
     if (!plan.ready) throw new Error(`Refusing upgrade because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
-    const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
+    const installer = fileURLToPath(new URL('./openclaw-install.mjs', import.meta.url));
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--language', manifest.language || 'en', '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--language', manifest.language || 'en', '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--dashboard-listen', manifest.dashboard?.listen || 'localhost', '--tailscale-bin', manifest.dashboard?.tailscaleBin || 'tailscale', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
       child.on('close', (code) => resolve({ code, stdout, stderr }));
     });

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { applyManagedInstructions, installDashboardUnlessShared } from './install-shared.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: null, openclawBin: 'openclaw', systemctlBin: 'systemctl', dashboardListen: 'localhost', tailscaleBin: 'tailscale', language: 'auto', json: false, confirmInstall: false, force: false };
@@ -35,6 +37,14 @@ function resolveLanguage(requested = 'auto', env = process.env) {
 
 const text = (language, en, zh) => language === 'zh' ? zh : en;
 
+// WorkingDirectory= takes the path literally (systemd does not decode C
+// escapes there); only specifiers need escaping. Newlines cannot be encoded.
+function systemdWorkingDirectory(value) {
+  const text = String(value);
+  if (/[\n\r]/.test(text)) throw new Error('Workspace path must not contain a newline.');
+  return text.replace(/%/g, '%%');
+}
+
 function systemdEscapePath(value) {
   return [...Buffer.from(String(value))]
     .map((byte) => /[A-Za-z0-9/_.:-]/.test(String.fromCharCode(byte))
@@ -48,6 +58,7 @@ function safeId(value, label) {
   return value;
 }
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
 
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
@@ -262,7 +273,7 @@ process.stdout.write(JSON.stringify(result) + '\\n');
 }
 
 function schedulerServiceSource({ root, queue, language }) {
-  return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
+  return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdWorkingDirectory(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
 }
 
 function schedulerTimerSource({ queue, language }) {
@@ -337,7 +348,7 @@ async function main() {
   args.openclawBin = await resolveExecutable(args.openclawBin);
   const worker = await resolveWorkerAgent(args);
   args.workerAgent = worker.workerAgent;
-  args.loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+  args.loopBin = fileURLToPath(new URL('../bin/loop-engineering.mjs', import.meta.url));
   args.humanGateAdapter = new URL('../lib/human-gate-channel-adapter.mjs', import.meta.url).href;
   const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
   const schedulerUnit = `openclaw-loop-${args.queue}-scheduler.service`;
@@ -399,19 +410,18 @@ async function main() {
     await mkdir(systemdUserDir, { recursive: true });
     await writeFile(files.schedulerService, schedulerServiceContent);
     await writeFile(files.schedulerTimer, schedulerTimerContent);
-    const daemonReload = await run(args.systemctlBin, ['--user', 'daemon-reload'], { cwd: args.root });
-    if (daemonReload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(daemonReload.stderr || daemonReload.stdout).trim() || `exit ${daemonReload.code}`}`);
-    const enableTimer = await run(args.systemctlBin, ['--user', 'enable', '--now', schedulerTimer], { cwd: args.root });
-    if (enableTimer.code !== 0) throw new Error(`Cannot enable Loop scheduler timer ${schedulerTimer}: ${(enableTimer.stderr || enableTimer.stdout).trim() || `exit ${enableTimer.code}`}`);
-    const dashboardInstaller = new URL('./dashboard-autostart-install.mjs', import.meta.url).pathname;
-    const dashboardInstall = await run(process.execPath, [dashboardInstaller, '--root', args.root, '--listen', args.dashboardListen, '--tailscale-bin', args.tailscaleBin, '--systemctl-bin', args.systemctlBin, '--confirm-install', '--json'], { cwd: args.root });
-    if (dashboardInstall.code !== 0) throw new Error(`Cannot install Dashboard gateway autostart: ${(dashboardInstall.stderr || dashboardInstall.stdout).trim()}`);
-    const instructions = await exists(files.instructions) ? await readFile(files.instructions, 'utf8') : '';
+    // Record ownership before anything is enabled, so a failure in a later
+    // step leaves an integration that manage --action uninstall can remove.
+    const previousManifest = await readFile(files.manifest, 'utf8').then(JSON.parse).catch(() => null);
     const managedInstructions = instructionsBlock(args);
-    if (!instructions.includes('<!-- loop-engineering:openclaw:start -->')) await appendFile(files.instructions, managedInstructions);
-    await mkdir(path.dirname(files.manifest), { recursive: true });
-    await writeFile(files.manifest, `${JSON.stringify({
-      version: 4, queue: args.queue, language: args.language, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
+    const recordedInstructions = await applyManagedInstructions(files.instructions, managedInstructions, {
+      previousBlock: previousManifest?.managedInstructions?.content,
+      force: args.force,
+      startMarker: '<!-- loop-engineering:openclaw:start -->',
+      endMarker: '<!-- loop-engineering:openclaw:end -->'
+    });
+    const manifest = {
+      version: 5, status: 'installing', queue: args.queue, language: args.language, workerAgent: args.workerAgent, openclawBin: args.openclawBin, systemctlBin: args.systemctlBin, installedAt: new Date().toISOString(),
       managedFiles: [
         { path: path.relative(args.root, files.queueConfig), sha256: sha256(queueContent) },
         { path: path.relative(args.root, files.dispatcher), sha256: sha256(dispatcherContent) },
@@ -423,9 +433,24 @@ async function main() {
         { path: files.schedulerService, unit: schedulerUnit, sha256: sha256(schedulerServiceContent) },
         { path: files.schedulerTimer, unit: schedulerTimer, sha256: sha256(schedulerTimerContent) }
       ],
-      managedInstructions: { path: 'AGENTS.md', sha256: sha256(managedInstructions), content: managedInstructions },
+      managedInstructions: { path: 'AGENTS.md', sha256: sha256(recordedInstructions), content: recordedInstructions },
+      dashboard: { listen: args.dashboardListen, tailscaleBin: args.tailscaleBin, installed: false },
       retainedOnUninstall: [`runtime/loops/${args.queue}`]
-    }, null, 2)}\n`);
+    };
+    const writeManifest = async () => {
+      await mkdir(path.dirname(files.manifest), { recursive: true });
+      await writeFile(files.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+    };
+    await writeManifest();
+    const daemonReload = await run(args.systemctlBin, ['--user', 'daemon-reload'], { cwd: args.root });
+    if (daemonReload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(daemonReload.stderr || daemonReload.stdout).trim() || `exit ${daemonReload.code}`}`);
+    const enableTimer = await run(args.systemctlBin, ['--user', 'enable', '--now', schedulerTimer], { cwd: args.root });
+    if (enableTimer.code !== 0) throw new Error(`Cannot enable Loop scheduler timer ${schedulerTimer}: ${(enableTimer.stderr || enableTimer.stdout).trim() || `exit ${enableTimer.code}`}`);
+    const dashboard = await installDashboardUnlessShared({ root: args.root, listen: args.dashboardListen, tailscaleBin: args.tailscaleBin, systemctlBin: args.systemctlBin, run });
+    manifest.dashboard = dashboard;
+    if (dashboard.skipped) report.dashboardAutostart = { ...report.dashboardAutostart, skipped: dashboard.skipped };
+    manifest.status = 'installed';
+    await writeManifest();
   }
   console.log(args.json ? JSON.stringify(report, null, 2) : text(args.language, `OpenClaw integration: ${report.status}\nconflicts: ${report.conflicts.join(', ') || 'none'}\nnext: ${report.next}`, `OpenClaw 集成：${report.status}\n冲突：${report.conflicts.join(', ') || '无'}\n下一步：${report.next}`));
 }

@@ -17,13 +17,13 @@ No single page, milestone, checkpoint, or passing test subset completes this pro
 - Terminal contract, milestone and project status: milestone 1 projection/API/UI tests.
 - Revision lineage and acceptance/final-judge timeline: milestone 1 task workspace fixtures.
 - Human gates and external-action reservations: milestones 1–2 projection and inspection views.
-- Safe read-only boundary: no mutation endpoints or controls; loopback default, explicit non-loopback override, redaction, XSS/path traversal checks.
+- Safe boundary: read-only projection; the only mutation is operator-token Human Gate commands through `executeGateCommand`; loopback default with Host checking, explicit non-loopback override, redaction, XSS/path traversal checks.
 - Information architecture, interaction and responsive UI: milestones 1–2.
 - Tests, documentation and release-level acceptance: milestones 1–3.
 
 ## Explicit boundaries
 
-The workspace does not approve gates, resume tasks, settle reservations, modify contracts, repair artifacts, or serve arbitrary evidence files. Those actions remain in governed CLI/control-plane workflows. A future authenticated mutation product would require a separate authority model and project contract.
+The workspace approves or rejects Human Gates only for an authenticated operator (see `docs/operator-dashboard.md`). It does not resume tasks, settle reservations, modify contracts, repair artifacts, or serve arbitrary evidence files. Those actions remain in governed CLI/control-plane workflows. A future authenticated mutation product would require a separate authority model and project contract.
 
 ## Project completion rule
 

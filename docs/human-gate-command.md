@@ -4,7 +4,7 @@
 
 Each gate records project, task, Gate ID, action, reason, impact, risk, cost/budget, evidence, Dashboard URL, expiry, generation, allowed actors and one or more exact source bindings. Commands require `gate_id`, `expected_generation`, actor identity, channel/message binding, reply binding for reply commands, and an idempotency key. Successful commands produce durable receipts. Per-gate exclusive creation plus the generation fence makes only the first valid cross-interface command commit.
 
-Allowed mutations are card-button callbacks and replies matching `/approve gate_<id>`, `/reject gate_<id>`, or `/request_revision gate_<id> <reason>` where the reply is bound to the registered card. Ordinary language, ordinal references, quotes, forwards and screenshots are ignored or rejected.
+Allowed mutations are card-button callbacks and replies matching `/approve gate_<id>@<generation>`, `/reject gate_<id>@<generation>`, or `/request_revision gate_<id>@<generation> <reason>` where the reply is bound to the registered card. The generation is required because a chat reply carries no other proof of which card version was answered; each card button lists its exact `reply_command`, and a reply without a generation returns `generation_required`. Ordinary language, ordinal references, quotes, forwards and screenshots are ignored or rejected.
 
 High/critical risk, production, external publication, irreversible work, or cost at/above the configured threshold enters `awaiting_confirmation` and increments generation. A second command against the new generation is required. `request_revision` writes a revision artifact, increments generation, and invalidates old cards. Clients refresh from `/api/v1/gates`; processed cards render disabled.
 

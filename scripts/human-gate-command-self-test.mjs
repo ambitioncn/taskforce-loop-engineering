@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHumanGate, executeGateCommand, getHumanGate, parseBoundReply } from '../lib/human-gate-command.mjs';
 import { handleChannelGateEvent, normalizeFeishuGateEvent, renderGateForChannel } from '../lib/human-gate-channel-adapter.mjs';
-import { createDashboardServer } from '../lib/operator-dashboard.mjs';
+import { request as httpRequest } from 'node:http';
+import { addDashboardOperator, createDashboardServer, removeDashboardOperator } from '../lib/operator-dashboard.mjs';
 
 const root = await mkdtemp(path.join(tmpdir(), 'loop-gate-command-'));
 const base = { project: 'p', task: 't', action: 'deploy', reason: 'release', impact: 'production', risk: { level: 'high' }, cost: { amount: 10, currency: 'CNY', budget: 100 }, evidence: ['test'], dashboard_url: 'http://127.0.0.1:4174/', expiry: '2030-01-01T00:00:00.000Z', allowed_actors: ['owner'], source_bindings: [{ channel: 'feishu', message_id: 'card-1', reply_to: 'card-1', adapter: 'feishu' }, { channel: 'dashboard', message_id: 'gate-panel', reply_to: 'gate-panel', adapter: 'dashboard' }] };
@@ -40,13 +41,41 @@ try {
     executeGateCommand(root, { ...command, gate_id: 'gate_cross', source_channel: 'dashboard', source_message_id: 'gate-panel', idempotency_key: 'cross-dashboard' })
   ]);
   assert.equal(cross.filter((x) => x.status === 'fulfilled').length, 1);
-  await createHumanGate(root, { ...base, gate_id: 'gate_http', confirmation_required: false });
+  await createHumanGate(root, { ...base, gate_id: 'gate_http', confirmation_required: false,
+    evidence: [{ accessToken: 'SECRET-ACCESS', Authorization: 'Bearer SECRET', api_token: 'SECRET-API', fencing_token: 7 }] });
   const server = await createDashboardServer(root, { host: '127.0.0.1', port: 0 });
   try {
     const address = server.address();
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/gate-commands`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gate_id: 'gate_http', decision: 'approve', expected_generation: 1, actor_id: 'owner', source_message_id: 'gate-panel', idempotency_key: 'http-1' }) });
-    assert.equal(response.status, 200); assert.equal((await response.json()).outcome, 'approved');
-    const gatesResponse = await fetch(`http://127.0.0.1:${address.port}/api/v1/gates`); assert.equal(gatesResponse.status, 200); assert.ok((await gatesResponse.json()).some((g) => g.gate_id === 'gate_http'));
+    const endpoint = `http://127.0.0.1:${address.port}/api/v1/gate-commands`;
+    const body = (key, extra = {}) => JSON.stringify({ gate_id: 'gate_http', decision: 'approve', expected_generation: 1, source_message_id: 'gate-panel', idempotency_key: key, ...extra });
+    // Gate commands are disabled until an operator is registered, and the
+    // body's actor_id is never trusted.
+    let response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body('http-anon', { actor_id: 'owner' }) });
+    assert.equal(response.status, 401, 'anonymous dashboard approval is rejected');
+    const intruder = await addDashboardOperator(root, { actorId: 'intruder' });
+    response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${intruder.token}` }, body: body('http-intruder', { actor_id: 'owner' }) });
+    assert.equal((await response.json()).outcome !== 'approved', true, 'a token cannot claim another actor');
+    assert.equal((await getHumanGate(root, 'gate_http')).status, 'pending');
+    await removeDashboardOperator(root, { actorId: 'intruder' });
+    response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${intruder.token}` }, body: body('http-removed') });
+    assert.equal(response.status, 401, 'a removed operator token is rejected');
+    const owner = await addDashboardOperator(root, { actorId: 'owner' });
+    response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'text/plain', authorization: `Bearer ${owner.token}` }, body: body('http-plain') });
+    assert.equal(response.status, 415, 'a CORS-simple text/plain POST is rejected');
+    const rebound = await new Promise((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port: address.port, path: '/api/v1/gates', headers: { host: `attacker.example:${address.port}` } }, (res) => { res.resume(); resolve(res.statusCode); });
+      req.on('error', reject); req.end();
+    });
+    assert.equal(rebound, 421, 'a DNS-rebinding Host header is rejected');
+    response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` }, body: body('http-1') });
+    assert.equal(response.status, 200);
+    const receipt = await response.json();
+    assert.equal(receipt.outcome, 'approved'); assert.equal(receipt.actor_id, 'owner');
+    const gatesResponse = await fetch(`http://127.0.0.1:${address.port}/api/v1/gates`); assert.equal(gatesResponse.status, 200);
+    const gatesText = await gatesResponse.text();
+    assert.ok(JSON.parse(gatesText).some((g) => g.gate_id === 'gate_http'));
+    assert.equal(/SECRET/.test(gatesText), false, 'gate evidence credentials are redacted');
+    assert.match(gatesText, /"fencing_token":7/, 'fencing tokens remain visible');
   } finally { await new Promise((resolve) => server.close(resolve)); }
   console.log('human-gate-command self-test: ok (unit, integration, replay, expiry, authorization, misrecognition, Feishu mapping, concurrency)');
 } finally { await rm(root, { recursive: true, force: true }); }

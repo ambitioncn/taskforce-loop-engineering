@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -90,6 +90,7 @@ const timer = await readFile(timerFile, 'utf8');
 if (!service.includes('scheduler-tick') || !timer.includes('OnUnitActiveSec=1min')) throw new Error('scheduler systemd units were not installed');
 if (!(await readFile(dashboardServiceFile, 'utf8')).includes('dashboard-serve') || !(await readFile(dashboardDropIn, 'utf8')).includes('Wants=loop-engineering-dashboard.service')) throw new Error('OpenClaw installer did not install Dashboard gateway autostart');
 if (service.includes('WorkingDirectory="') || service.includes('ExecStart="') || !service.includes('\\x20') || !service.includes('\\xe5\\xae\\x89\\xe8\\xa3\\x85')) throw new Error('scheduler service paths were not encoded with systemd path escapes');
+if (service.match(/^WorkingDirectory=(.*)$/m)?.[1] !== root) throw new Error('WorkingDirectory must be the literal workspace path; systemd does not decode escapes there');
 const systemdVerify = await new Promise((resolve) => {
   const child = spawn('systemd-analyze', ['verify', serviceFile, timerFile], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = ''; child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -229,4 +230,49 @@ const queuedTasks = await Promise.all(queuedFiles.map(async (file) => JSON.parse
 if (!queuedTasks.some((task) => task.body.includes('[project-relay:relay-project/local-1]'))
   || !queuedTasks.some((task) => task.body.includes('[project-scout:abc123]'))
   || queuedTasks.some((task) => task.body.includes('只入队'))) throw new Error('internal relay corrupted task intent');
+// Install lifecycle: reinstall updates the managed AGENTS.md block, uninstall
+// removes the dashboard this install owns, a mid-install failure is still
+// uninstallable, another workspace's dashboard is left alone, and upgrade
+// keeps the Tailnet listen mode.
+const dashboardService = path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/loop-engineering-dashboard.service');
+const exists = (file) => readFile(file).then(() => true, () => false);
+const blockCount = (text) => text.split('<!-- loop-engineering:openclaw:start -->').length - 1;
+const enInstall = await run([...installBase, '--worker-agent', 'builder', '--language', 'en', '--confirm-install', '--force', '--json']);
+if (enInstall.code !== 0) throw new Error(`reinstall failed: ${enInstall.stderr}`);
+const enInstructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
+if (blockCount(enInstructions) !== 1 || enInstructions.includes('Loop Engineering 会话路由') || !enInstructions.includes('Loop Engineering conversation routing')) throw new Error('reinstall did not replace the managed AGENTS.md block');
+await writeFile(path.join(root, 'AGENTS.md'), enInstructions.replace('Loop Engineering conversation routing', 'Loop Engineering conversation routing (edited)'));
+const editedReinstall = await run([...installBase, '--worker-agent', 'builder', '--language', 'zh', '--confirm-install', '--force', '--json']);
+if (editedReinstall.code !== 0 || blockCount(await readFile(path.join(root, 'AGENTS.md'), 'utf8')) !== 1) throw new Error('--force reinstall did not replace an edited block');
+const lifecycleUninstall = await manage(['--action', 'uninstall', '--confirm-uninstall']);
+if (lifecycleUninstall.code !== 0) throw new Error(`uninstall after reinstall failed: ${lifecycleUninstall.stderr}`);
+if (await exists(dashboardService) || await exists(path.join(process.env.XDG_CONFIG_HOME, 'systemd/user/openclaw-gateway.service.d/loop-engineering-dashboard.conf'))) throw new Error('uninstall left the dashboard service or gateway drop-in behind');
+if (!(await readFile(systemctlCapture, 'utf8')).includes('["--user","stop","loop-engineering-dashboard.service"]')) throw new Error('uninstall did not stop the dashboard');
+if (blockCount(await readFile(path.join(root, 'AGENTS.md'), 'utf8')) !== 0) throw new Error('uninstall left the managed block');
+
+const failingSystemctl = path.join(root, 'failing-systemctl.mjs');
+await writeFile(failingSystemctl, `#!/usr/bin/env node\nif (process.argv.includes('enable')) { console.error('enable refused'); process.exit(1); }\n`);
+await chmod(failingSystemctl, 0o755);
+const failedInstall = await run(['--root', root, '--queue', 'test-tasks', '--openclaw-bin', mockOpenClaw, '--systemctl-bin', failingSystemctl, '--worker-agent', 'builder', '--confirm-install', '--json']);
+if (failedInstall.code === 0) throw new Error('installer ignored a failed timer enable');
+const partialManifest = JSON.parse(await readFile(path.join(root, 'runtime/loop-engineering-openclaw-install.json'), 'utf8'));
+if (partialManifest.status !== 'installing') throw new Error('a failed install left no manifest');
+const partialUninstall = await manage(['--action', 'uninstall', '--confirm-uninstall']);
+if (partialUninstall.code !== 0 || await exists(path.join(root, 'scripts/loops/openclaw-loop.mjs'))) throw new Error(`a partial install could not be uninstalled: ${partialUninstall.stderr}`);
+
+const foreignService = '[Service]\nExecStart=/usr/bin/node /opt/loop/bin/loop-engineering.mjs dashboard-serve --root /srv/other --host 127.0.0.1 --port 4174\n';
+await writeFile(dashboardService, foreignService);
+const sharedInstall = await run([...installBase, '--worker-agent', 'builder', '--confirm-install', '--json']);
+if (sharedInstall.code !== 0 || !JSON.parse(sharedInstall.stdout).dashboardAutostart?.skipped) throw new Error(`installer did not skip another workspace's dashboard: ${sharedInstall.stderr}`);
+if (await readFile(dashboardService, 'utf8') !== foreignService) throw new Error('installer repointed another workspace dashboard');
+if ((await manage(['--action', 'uninstall', '--confirm-uninstall'])).code !== 0 || await readFile(dashboardService, 'utf8') !== foreignService) throw new Error('uninstall touched another workspace dashboard');
+await rm(dashboardService);
+
+const mockTailscale = path.join(root, 'mock-tailscale.mjs');
+await writeFile(mockTailscale, `#!/usr/bin/env node\nconsole.log('100.64.10.20');\n`);
+await chmod(mockTailscale, 0o755);
+const tailnetInstall = await run([...installBase, '--worker-agent', 'builder', '--dashboard-listen', 'tailscale', '--tailscale-bin', mockTailscale, '--confirm-install', '--json']);
+if (tailnetInstall.code !== 0) throw new Error(`Tailnet install failed: ${tailnetInstall.stderr}`);
+const tailnetUpgrade = await manage(['--action', 'upgrade', '--confirm-upgrade']);
+if (tailnetUpgrade.code !== 0 || !(await readFile(dashboardService, 'utf8')).includes('--host 100.64.10.20')) throw new Error(`upgrade did not keep the Tailnet dashboard: ${tailnetUpgrade.stderr}`);
 console.log('openclaw installer self-test passed');

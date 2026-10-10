@@ -27,8 +27,15 @@ error rate, and recovery time remain independently reviewable.
    simulated I/O. The boundary is explicit: fixtures prove adapter compatibility,
    not availability of a real gateway or provider.
 4. Evidence schema v1 supports baselines and metric deltas, threshold failures
-   with attribution, SHA-256 tamper detection, credential-shaped field redaction,
-   and a minimized public summary. Offline reruns require no network or secret.
+   with attribution, an integrity seal, credential-shaped field redaction
+   (including camelCase keys such as `accessToken` and `Authorization`), and a
+   minimized public summary. Offline reruns require no network or secret. The
+   `passed` verdict is recomputed from thresholds, scenarios and compatibility
+   when sealing and when summarizing, so it cannot be asserted by hand. Without a
+   key the seal is a plain SHA-256 digest: it detects accidental corruption, but
+   anyone who can edit the file can recompute it. Set `LOOP_EVIDENCE_HMAC_KEY`
+   (or pass `{ key }`) to seal with HMAC-SHA-256; verifying such a report then
+   requires the same key and a forged report cannot be re-sealed without it.
 5. GitHub CI template/artifact upload and badge markup are release candidates;
    no workflow is published in this local task. Doctor and dashboard project the
    latest evidence state without mutating it.
