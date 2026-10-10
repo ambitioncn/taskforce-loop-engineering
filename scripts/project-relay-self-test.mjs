@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureQueueDirs, projectRelayNext, projectRelayReconcile, queueSchedulerTick, queueStatus } from '../lib/core.mjs';
+import { readdir } from 'node:fs/promises';
+import { ensureQueueDirs, projectRelayNext, projectRelayReconcile, projectRelayResume, queueSchedulerTick, queueStatus } from '../lib/core.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'loop-project-relay-'));
 const queue = 'relay-test';
@@ -135,4 +136,68 @@ assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 0,
 await unlink(path.join(doneDir, 'second-root.json'));
 assert.equal((await projectRelayReconcile(root, { queue, project })).changed, 1, 'an accepted revision round completes its relay item');
 assert.equal(JSON.parse(await readFile(backlogFile, 'utf8')).items[0].status, 'completed');
+// Reconciliation must not overwrite a backlog edited after it was read.
+await writeJson(backlogFile, { items: [revisedItem] });
+const concurrentEdit = { items: [{ ...revisedItem, note: 'edited by an agent' }] };
+const raced = await projectRelayReconcile(root, { queue, project, beforeWrite: () => writeJson(backlogFile, concurrentEdit) });
+assert.deepEqual(raced, { changed: 0, conflict: true }, 'a concurrent backlog edit aborts reconciliation');
+assert.deepEqual(JSON.parse(await readFile(backlogFile, 'utf8')), concurrentEdit, 'the concurrent edit survives');
+assert.deepEqual((await readdir(path.dirname(backlogFile))).filter((name) => name.endsWith('.tmp')), [], 'no temporary backlog is left behind');
+
+// Fresh workspace for relay retry, duplicate ids, and scheduler locking.
+{
+  const root = await mkdtemp(path.join(os.tmpdir(), 'loop-project-relay-resume-'));
+  const queueDir = path.join(root, 'runtime/loops', queue);
+  const backlogFile = path.join(root, 'project/backlog.json');
+  await ensureQueueDirs(root, queue);
+  await writeJson(path.join(root, 'configs/loops/projects', `${project}.json`), spec);
+  await writeJson(path.join(root, 'project/ledger.json'), { status: 'in_progress' });
+  const next = { ...item, id: 'local-2' };
+
+  // Duplicate or malformed rows can neither prove a predecessor nor be relayed.
+  await writeJson(backlogFile, { items: [null, predecessor, { ...predecessor, status: 'ready' }, next] });
+  assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'duplicate predecessor ids fail closed');
+  await writeJson(backlogFile, { items: [null, predecessor, next, { ...next, title: 'Shadow' }] });
+  assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'duplicate candidate ids are not relayed');
+  await writeJson(backlogFile, { items: [predecessor, next, { ...next, title: 'Shadow' }, { ...item, id: 'local-3', dependsOn: ['local-2'] }] });
+  assert.equal(await projectRelayNext(root, { queue, task, finalJudgement }), null, 'a duplicated dependency is never complete');
+
+  // The accepted predecessor finished while the queue was busy, so the
+  // completion-time relay was skipped. An idle scheduler tick resumes it.
+  await writeJson(backlogFile, { items: [predecessor, next] });
+  const accepted = { ...task, title: 'Accepted', body: 'Accepted work', status: 'completed', finishedAt: '2026-10-01T00:00:00.000Z' };
+  await writeJson(path.join(queueDir, 'done', `${accepted.id}.json`), accepted);
+  await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), finalJudgement);
+  const older = { ...accepted, id: 'older-task', backlogItemId: 'local-0', finishedAt: '2026-09-01T00:00:00.000Z' };
+  await writeJson(path.join(queueDir, 'done', `${older.id}.json`), older);
+  await writeJson(path.join(queueDir, 'scheduler/state.json'), { nextRunAt: '2999-01-01T00:00:00.000Z' });
+
+  await writeJson(path.join(queueDir, 'inbox', 'busy.json'), { id: 'busy', title: 'Busy', body: 'User work', status: 'queued' });
+  assert.equal(await projectRelayResume(root, { queue, project }), null, 'a busy queue still defers the relay');
+  await unlink(path.join(queueDir, 'inbox', 'busy.json'));
+
+  const lockFile = path.join(queueDir, 'queue.lock');
+  await writeFile(lockFile, JSON.stringify({ version: 1, queue, pid: process.pid,
+    acquiredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }));
+  const locked = await queueSchedulerTick(root, { queue });
+  assert.equal(locked.relayMaintenance, 'queue_locked');
+  assert.deepEqual(locked.projectRelay, [], 'a tick without the queue lock cannot relay');
+  assert.equal((await queueStatus(root, queue)).queued, 0);
+  await unlink(lockFile);
+
+  await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), { outcome: 'needs_revision', requires_human_gate: false });
+  assert.deepEqual((await queueSchedulerTick(root, { queue })).projectRelay, [], 'the newest bound task must be accepted');
+  await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), finalJudgement);
+
+  const resumed = await queueSchedulerTick(root, { queue });
+  assert.equal(resumed.relayMaintenance, 'completed');
+  assert.equal(resumed.projectRelay.length, 1);
+  assert.equal(resumed.projectRelay[0].itemId, 'local-2');
+  const relayed = JSON.parse(await readFile(path.join(root, resumed.projectRelay[0].file), 'utf8'));
+  assert.equal(relayed.backlogItemId, 'local-2');
+  assert.equal(relayed.source.message_id, 'message-1');
+  assert.deepEqual((await queueSchedulerTick(root, { queue })).projectRelay, [], 'a resumed relay is not enqueued twice');
+  assert.equal((await queueStatus(root, queue)).queued, 1);
+  await rm(root, { recursive: true, force: true });
+}
 console.log('project relay self-test passed');

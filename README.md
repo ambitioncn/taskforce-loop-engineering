@@ -439,6 +439,10 @@ must be readable. The runner enqueues at most one
 dependency-ready item after the accepted task; duplicate markers, a busy
 queue, human gates, missing authority, or accepted project terminal state stop
 the relay. The existing scheduler executes that queued item on its next tick.
+If the queue was busy when the task was accepted, a later non-plan-only
+scheduler tick that holds the queue lock with no active task retries the relay
+from the newest accepted backlog-bound task, under the same checks. Backlog rows
+with duplicate ids can neither satisfy a predecessor or dependency nor be relayed.
 The relay does not infer safe work from prose or promote project acceptance.
 
 Projects with a mutable `backlogSource` may also set
@@ -448,8 +452,10 @@ same-project relay lineage (the relay task plus any `revisionOf` revision
 rounds bound to the same item) is in the done queue and exactly one of its
 persisted final judgements is `ready_to_apply` without a human gate. Missing, duplicate, failed, gated, or
 external-action tasks leave the source unchanged. Reconciliation is idempotent
-and also runs on subsequent non-plan-only scheduler ticks, so an interrupted
-completion write can recover. It does not change the project acceptance ledger or requirement matrix. Do
+and also runs on subsequent non-plan-only scheduler ticks that hold the queue
+lock with no active task, so an interrupted completion write can recover. If
+the backlog changes after reconciliation reads it, the write is abandoned
+(`conflict: true`) instead of overwriting the newer version. It does not change the project acceptance ledger or requirement matrix. Do
 not enable it on an immutable or generated authoritative backlog source.
 
 ## Observability
