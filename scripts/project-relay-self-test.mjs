@@ -200,4 +200,27 @@ assert.deepEqual((await readdir(path.dirname(backlogFile))).filter((name) => nam
   assert.equal((await queueStatus(root, queue)).queued, 1);
   await rm(root, { recursive: true, force: true });
 }
+// A failed or canceled relay task stops the chain: an idle tick must not skip
+// it and relay the next independent item. Ambiguous ordering fails closed.
+for (const stop of ['canceled', 'failed', 'tied']) {
+  const root = await mkdtemp(path.join(os.tmpdir(), `loop-project-relay-stop-${stop}-`));
+  const queueDir = path.join(root, 'runtime/loops', queue);
+  await ensureQueueDirs(root, queue);
+  await writeJson(path.join(root, 'configs/loops/projects', `${project}.json`), spec);
+  await writeJson(path.join(root, 'project/ledger.json'), { status: 'in_progress' });
+  await writeJson(path.join(root, 'project/backlog.json'), { items: [predecessor, { ...item, id: 'local-1' }, { ...item, id: 'local-2' }] });
+  await writeJson(path.join(queueDir, 'done', `${task.id}.json`), { ...task, status: 'completed', body: 'Accepted work',
+    enqueuedAt: '2026-10-01T00:00:00.000Z', finishedAt: '2026-10-01T01:00:00.000Z' });
+  await writeJson(path.join(queueDir, 'tasks', task.id, 'final_judgement.json'), finalJudgement);
+  const stopped = { ...task, id: 'relay-local-1', backlogItemId: 'local-1', body: `[project-relay:${project}/local-1]\nVerify`,
+    status: stop === 'tied' ? 'completed' : stop,
+    enqueuedAt: stop === 'tied' ? '2026-10-01T00:00:00.000Z' : '2026-10-01T01:00:01.000Z' };
+  await writeJson(path.join(queueDir, stop === 'tied' ? 'done' : stop, `${stopped.id}.json`), stopped);
+  await writeJson(path.join(queueDir, 'scheduler/state.json'), { nextRunAt: '2999-01-01T00:00:00.000Z' });
+  const tick = await queueSchedulerTick(root, { queue });
+  assert.equal(tick.relayMaintenance, 'completed');
+  assert.deepEqual(tick.projectRelay, [], `a ${stop} relay task stops the relay chain`);
+  assert.equal((await queueStatus(root, queue)).queued, 0);
+  await rm(root, { recursive: true, force: true });
+}
 console.log('project relay self-test passed');

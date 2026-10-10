@@ -440,8 +440,10 @@ dependency-ready item after the accepted task; duplicate markers, a busy
 queue, human gates, missing authority, or accepted project terminal state stop
 the relay. The existing scheduler executes that queued item on its next tick.
 If the queue was busy when the task was accepted, a later non-plan-only
-scheduler tick that holds the queue lock with no active task retries the relay
-from the newest accepted backlog-bound task, under the same checks. Backlog rows
+scheduler tick that holds the queue lock with no active task retries the relay,
+under the same checks, when the most recently enqueued backlog-bound task is
+completed and accepted. A failed or canceled relay task stops the chain until a
+person acts on it. Backlog rows
 with duplicate ids can neither satisfy a predecessor or dependency nor be relayed.
 The relay does not infer safe work from prose or promote project acceptance.
 

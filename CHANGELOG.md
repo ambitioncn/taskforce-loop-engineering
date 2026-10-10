@@ -5,7 +5,7 @@
 - Stop classifying successful (exit 0) dispatches as recoverable runtime interruptions when the answer merely mentions free-text failure vocabulary such as "rate limit" or "connection reset"; only structured runtime trailers may override a zero exit, so completed work is no longer replayed.
 - Let relay status reconciliation follow a relay task's revision lineage, so an item accepted after a revision round is completed instead of stalling the relay; independent duplicate lineages and lineages without exactly one accepted round still fail closed.
 - Run scheduler relay maintenance only while holding the queue lock with no active task, and abandon a reconciliation write when the backlog changed after it was read, so concurrent agent edits are never overwritten.
-- Retry a relay that was skipped because the queue was busy on a later idle scheduler tick, from the newest accepted backlog-bound task and under the same fail-closed checks; report it as `projectRelay` with `relayMaintenance` status.
+- Retry a relay that was skipped because the queue was busy on a later idle scheduler tick, under the same fail-closed checks, only when the most recently enqueued backlog-bound task is completed and accepted, so a failed or canceled relay task still stops the chain; report it as `projectRelay` with `relayMaintenance` status.
 - Treat duplicate or malformed backlog rows as unusable for relay predecessors, dependencies, and candidates instead of letting the last duplicate win.
 
 ## 0.15.21 - 2026-09-30
