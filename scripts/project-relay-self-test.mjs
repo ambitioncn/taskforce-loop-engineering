@@ -186,18 +186,44 @@ assert.deepEqual((await readdir(path.dirname(backlogFile))).filter((name) => nam
   await unlink(lockFile);
 
   await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), { outcome: 'needs_revision', requires_human_gate: false });
-  assert.deepEqual((await queueSchedulerTick(root, { queue })).projectRelay, [], 'the newest bound task must be accepted');
-  await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), finalJudgement);
+  const rejected = await queueSchedulerTick(root, { queue });
+  assert.equal(rejected.relayMaintenance, 'completed');
+  assert.deepEqual(rejected.projectRelay, [], 'the newest bound task must be accepted');
+  assert.equal((await queueSchedulerTick(root, { queue })).relayMaintenance, 'unchanged', 'an unchanged queue skips the full relay scan');
 
+  // An in-place judgement edit is invisible to the cheap fingerprint: it is
+  // picked up by the periodic full pass, never acted on from stale state.
+  await writeJson(path.join(queueDir, 'tasks', accepted.id, 'final_judgement.json'), finalJudgement);
+  const skipped = await queueSchedulerTick(root, { queue });
+  assert.equal(skipped.relayMaintenance, 'unchanged');
+  assert.deepEqual(skipped.projectRelay, []);
+  const maintenanceFile = path.join(queueDir, 'scheduler/relay-maintenance.json');
+  const lastPass = JSON.parse(await readFile(maintenanceFile, 'utf8'));
+  await writeJson(maintenanceFile, { ...lastPass, fullPassAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
   const resumed = await queueSchedulerTick(root, { queue });
-  assert.equal(resumed.relayMaintenance, 'completed');
+  assert.equal(resumed.relayMaintenance, 'completed', 'the periodic full pass runs despite an unchanged fingerprint');
   assert.equal(resumed.projectRelay.length, 1);
   assert.equal(resumed.projectRelay[0].itemId, 'local-2');
   const relayed = JSON.parse(await readFile(path.join(root, resumed.projectRelay[0].file), 'utf8'));
   assert.equal(relayed.backlogItemId, 'local-2');
   assert.equal(relayed.source.message_id, 'message-1');
-  assert.deepEqual((await queueSchedulerTick(root, { queue })).projectRelay, [], 'a resumed relay is not enqueued twice');
+  const afterRelay = await queueSchedulerTick(root, { queue });
+  assert.equal(afterRelay.relayMaintenance, 'completed', 'a queue change during a pass triggers another full pass');
+  assert.deepEqual(afterRelay.projectRelay, [], 'a resumed relay is not enqueued twice');
   assert.equal((await queueStatus(root, queue)).queued, 1);
+  assert.equal((await queueSchedulerTick(root, { queue })).relayMaintenance, 'unchanged');
+  await writeFile(backlogFile, `${await readFile(backlogFile, 'utf8')}\n`);
+  assert.equal((await queueSchedulerTick(root, { queue })).relayMaintenance, 'completed', 'a backlog edit invalidates the fingerprint');
+  assert.equal((await queueSchedulerTick(root, { queue, relayMaintenanceFullIntervalMs: 0 })).relayMaintenance, 'completed',
+    'a zero interval always runs the full pass');
+  // An unreadable task file fails the pass without throwing from the tick,
+  // and the pass is not recorded, so it is retried on the next tick.
+  await writeFile(path.join(queueDir, 'done', 'corrupt.json'), '{');
+  const broken = await queueSchedulerTick(root, { queue });
+  assert.equal(broken.relayMaintenance, 'error');
+  assert.equal(typeof broken.projectRelay[0].error, 'string');
+  assert.equal((await queueSchedulerTick(root, { queue })).relayMaintenance, 'error', 'a failed pass is retried');
+  await unlink(path.join(queueDir, 'done', 'corrupt.json'));
   await rm(root, { recursive: true, force: true });
 }
 // A failed or canceled relay task stops the chain: an idle tick must not skip

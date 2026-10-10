@@ -443,7 +443,15 @@ If the queue was busy when the task was accepted, a later non-plan-only
 scheduler tick that holds the queue lock with no active task retries the relay,
 under the same checks, when the most recently enqueued backlog-bound task is
 completed and accepted. A failed or canceled relay task stops the chain until a
-person acts on it. Backlog rows
+person acts on it.
+To keep idle ticks cheap, this relay maintenance runs a full scan only when a
+fingerprint changes: task file names in each queue state directory, the
+project spec, and the size and modification time of its backlog and acceptance
+files. A full pass also runs at least hourly (`relayMaintenanceFullIntervalMs`)
+to pick up in-place edits the fingerprint cannot see, such as a rewritten final
+judgement; skipping a pass can only delay a relay, never act on stale state.
+The tick reports `relayMaintenance` as `completed`, `unchanged`, `error`,
+`queue_locked`, `queue_active`, or `not_configured`. Backlog rows
 with duplicate ids can neither satisfy a predecessor or dependency nor be relayed.
 The relay does not infer safe work from prose or promote project acceptance.
 
