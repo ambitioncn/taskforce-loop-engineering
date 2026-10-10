@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Security:** Dashboard Human Gate commands now require an operator token (`dashboard-operator-add` / `dashboard-operator-remove`); the acting identity comes from the token instead of the request body, requests must be `application/json`, and loopback dashboards reject foreign `Host` headers (DNS rebinding). Gate evidence served by `/api/v1/gates` is redacted, and redaction now recognises camelCase keys such as `accessToken` and `Authorization` while keeping `fencing_token` visible. Without a registered operator, dashboard gate commands are disabled.
+- **Security:** Reject task ids that are not plain identifiers in every `--task-id` lookup, so `queue-cancel`, `queue-requeue` and review decisions cannot move or delete files outside the queue.
+- **Data loss:** `code-worktree-export` writes the complete patch, including untracked files as new-file diffs, instead of the last 60,000 characters; cleanup force-removes a dirty worktree only when its export manifest is complete and the worktree still matches it. Older exports must be re-exported before cleanup.
+- Keep Human Gates for tasks outside any project waiting instead of cancelling them as `project_not_found` on the next status or run.
+- Decode command output as UTF-8 across chunk boundaries so multi-byte text in patches and logs is not corrupted.
+
 - Stop classifying successful (exit 0) dispatches as recoverable runtime interruptions when the answer merely mentions free-text failure vocabulary such as "rate limit" or "connection reset"; only structured runtime trailers may override a zero exit, so completed work is no longer replayed.
 - Let relay status reconciliation follow a relay task's revision lineage, so an item accepted after a revision round is completed instead of stalling the relay; independent duplicate lineages and lineages without exactly one accepted round still fail closed.
 - Run scheduler relay maintenance only while holding the queue lock with no active task, and abandon a reconciliation write when the backlog changed after it was read, so concurrent agent edits are never overwritten.

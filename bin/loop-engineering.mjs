@@ -100,11 +100,13 @@ import {
   wakeAgent
 } from '../lib/todo-control-plane.mjs';
 import {
+  addDashboardOperator,
   buildOperatorProjection,
   createDashboardServer,
   dashboardHealth,
   exportDashboard,
-  filterProjection
+  filterProjection,
+  removeDashboardOperator
 } from '../lib/operator-dashboard.mjs';
 import { doctorGoal, initGoal, reviewGoal, runGoal, statusGoal } from '../lib/goal-api.mjs';
 
@@ -258,6 +260,8 @@ function parseArgs(argv) {
     else if (a === '--allow-dirty') args.allowDirty = true;
     else if (a === '--include-orphans') args.includeOrphans = true;
     else if (a === '--allow-non-loopback') args.allowNonLoopback = true;
+    else if (a === '--allowed-host') (args.allowedHosts ??= []).push(argv[++i]);
+    else if (a === '--actor-id') args.actorId = argv[++i];
     else if (a === '--json') args.json = true;
     else if (a === '--force') args.force = true;
     else if (a === '--help' || a === '-h') args.help = true;
@@ -1633,7 +1637,9 @@ Advanced compatibility commands:
   loop-engineering dashboard-inspect [--id todo-id] [--state state] [--query text] [--root <workspace>] [--json]
   loop-engineering dashboard-health [--max-age-seconds 3600] [--root <workspace>] [--json]
   loop-engineering dashboard-export --output-dir directory [--root <workspace>] [--json]
-  loop-engineering dashboard-serve [--host 127.0.0.1] [--port 0] [--allow-non-loopback] [--root <workspace>]
+  loop-engineering dashboard-serve [--host 127.0.0.1] [--port 0] [--allow-non-loopback] [--allowed-host name:port] [--root <workspace>]
+  loop-engineering dashboard-operator-add --actor-id id [--root <workspace>]
+  loop-engineering dashboard-operator-remove --actor-id id [--root <workspace>]
   loop-engineering repair-plan --id name [--output repair-plan.json] [--root <workspace>] [--json] [--force]
   loop-engineering project-intake --name project --brief "Project brief" [--type auto|web_app|code_project|research|content|ops|qa|knowledge_base|infra_audit|assistant_workflow] [--queue name] [--check "npm test"] [--root <workspace>] [--json]
   loop-engineering project-plan --project project [--root <workspace>] [--json] [--force]
@@ -5729,13 +5735,24 @@ async function main() {
 
 async function dashboardCommand(command, args) {
   if (command === 'dashboard-serve') {
-    const server = await createDashboardServer(args.root, { host: args.host, port: args.port, allowNonLoopback: args.allowNonLoopback });
+    const server = await createDashboardServer(args.root, { host: args.host, port: args.port, allowNonLoopback: args.allowNonLoopback, allowedHosts: args.allowedHosts });
     const address = server.address();
-    console.log(JSON.stringify({ status: 'serving', read_only: true, address }, null, 2));
+    console.log(JSON.stringify({ status: 'serving', read_only: false, gate_commands: 'operator_token_required', address }, null, 2));
     return new Promise((resolve) => {
       const stop = () => server.close(() => resolve(0));
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
     });
+  }
+  if (command === 'dashboard-operator-add') {
+    if (!args.actorId) throw new Error('dashboard-operator-add requires --actor-id.');
+    const result = await addDashboardOperator(args.root, { actorId: args.actorId });
+    console.log(JSON.stringify({ ...result, note: 'Store this token now; only its SHA-256 digest is kept. Re-running rotates it.' }, null, 2));
+    return 0;
+  }
+  if (command === 'dashboard-operator-remove') {
+    if (!args.actorId) throw new Error('dashboard-operator-remove requires --actor-id.');
+    console.log(JSON.stringify(await removeDashboardOperator(args.root, { actorId: args.actorId }), null, 2));
+    return 0;
   }
   if (command === 'dashboard-export') {
     if (!args.outputDir || args.outputDir === true) throw new Error('dashboard-export requires --output-dir.');
