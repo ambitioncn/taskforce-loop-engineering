@@ -529,8 +529,10 @@ LOOP_WORKDIR=/path/to/workspace \
   run-loop-cron.sh configs/loops/workspace-health.json
 ```
 
-Set `LOOP_ALERT_COMMAND` to a command that accepts one message argument when
-you want non-zero loop exits to notify a channel.
+Set `LOOP_ALERT_COMMAND` to a command (it may include its own arguments, for
+example `openclaw message send --target ops`) when you want non-zero loop exits
+or an unreadable config to notify a channel; the message is appended as one
+final argument. A failing alert command is recorded in the cron log.
 
 ## Queue Runner
 

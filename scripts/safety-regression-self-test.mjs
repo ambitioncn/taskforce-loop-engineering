@@ -5,6 +5,12 @@ import { createHash } from 'node:crypto';
 import { appendFile, utimes as touch } from 'node:fs/promises';
 import { claimAction, reserveAction, settleAction } from '../lib/action-reservations.mjs';
 import { DurableJournal } from '../lib/durable-journal.mjs';
+import { handleChannelGateEvent, normalizeFeishuGateEvent } from '../lib/human-gate-channel-adapter.mjs';
+import { createHumanGate, getHumanGate } from '../lib/human-gate-command.mjs';
+import { evaluateEvidence, publicEvidenceSummary, sealEvidence, verifyEvidence } from '../lib/production-evidence.mjs';
+import { readQuotaLedger, recordVerifiedSliceSpend } from '../lib/quota-runtime-decision.mjs';
+import { sensitiveKey } from '../lib/redaction.mjs';
+import { claimTodo, createTodo, decideHandoff, handoffTodo, recoverTodos, registerAgent, releaseTodo } from '../lib/todo-control-plane.mjs';
 import { TransactionalStateKernel } from '../lib/transactional-state-kernel.mjs';
 import { enqueueTask, ensureQueueDirs, queueCancel, queueRequeue, runCommand, runQueueOnce, queueStatus } from '../lib/core.mjs';
 import os from 'node:os';
@@ -240,6 +246,101 @@ try {
     await appendFile(journal.logFile, '{"version":1,"transactionId":"x","ty');
     await journal.append('e', 5);
     assert.equal((await journal.replay()).count, 5, 'a torn tail is discarded, not buried');
+  }
+
+  // Medium and low severity regressions.
+  {
+    const root = await tempRoot('medium');
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+
+    // CLI flags reject missing, swallowed and malformed values.
+    for (const [args, message] of [[['queue-status', '--queue'], /--queue requires a value/], [['enqueue', '--queue', 'q', '--title', '--task', 'x'], /--title requires a value/], [['queue-status', '--queue', 'q', '--timeout-ms', '10m'], /--timeout-ms must be an integer/]]) {
+      const result = spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8' });
+      assert.notEqual(result.status, 0); assert.match(result.stderr, message);
+    }
+
+    // json-value equality ignores key order.
+    await writeJson(path.join(root, 'cfg.json'), { port: 8080, host: '0.0.0.0' });
+    await writeJson(path.join(root, 'kv.json'), { id: 'kv', goal: 'Keep the service configuration stable', level: 'L1', mode: 'report-only', checks: [{ id: 'cfg', type: 'json-value', file: 'cfg.json', pointer: '', expected: { host: '0.0.0.0', port: 8080 } }] });
+    assert.match(loop(root, 'run', '--config', 'kv.json').stdout, /kv: success/);
+
+    // Project names match whole tokens only ("ui" is not in "build").
+    await writeJson(path.join(root, 'configs/loops/projects/ui.json'), { schemaVersion: 1, project: 'ui', type: 'code_project', queues: [{ queue: 'rq', kind: 'standard' }], backlog: [] });
+    const routed = (message) => JSON.parse(loop(root, 'route-message', '--message', message, '--route', '--confirm-execute', '--queue', 'rq', '--json').stdout);
+    assert.equal(routed('use loop engineering to build the billing export').task?.projectId ?? null, null);
+    assert.equal(routed('use loop engineering to fix the ui bug').task?.projectId, 'ui');
+
+    // A revision plan applied twice enqueues one revision.
+    await writeJson(path.join(root, 'plan.json'), { queue: 'rq', sourceTaskId: 'source-1', plannedTask: { title: 'Revise', body: 'Revise it', revisionOf: 'source-1' } });
+    assert.equal(loop(root, 'queue-revision-apply-plan', '--plan', 'plan.json').status, 0);
+    const second = loop(root, 'queue-revision-apply-plan', '--plan', 'plan.json');
+    assert.notEqual(second.status, 0); assert.match(second.stderr, /already enqueued/);
+
+    // A worktree task that is requeued reuses its branch and worktree.
+    git('init', '-q'); git('config', 'user.email', 'loop@example.invalid'); git('config', 'user.name', 'loop');
+    await writeFile(path.join(root, '.gitignore'), 'runtime/\nconfigs/\n*.json\n');
+    await writeFile(path.join(root, 'file.txt'), 'one\n');
+    git('add', '-A'); git('commit', '-qm', 'init');
+    loop(root, 'code-queue-init', '--queue', 'wq');
+    const wqConfig = path.join(root, 'configs/loops/queues/wq.json');
+    const config = JSON.parse(await readFile(wqConfig, 'utf8')); config.worktree.verifyCommands = []; delete config.preflightConfig; await writeJson(wqConfig, config);
+    loop(root, 'enqueue', '--queue', 'wq', '--title', 'Rerun', '--task', 'x');
+    loop(root, 'run-queue', '--queue', 'wq', '--config', 'configs/loops/queues/wq.json', '--dispatcher', 'echo two >> file.txt; exit 1');
+    const failedTask = (await readdir(path.join(root, 'runtime/loops/wq/failed')))[0].replace(/\.json$/, '');
+    loop(root, 'queue-requeue', '--queue', 'wq', '--task-id', failedTask);
+    loop(root, 'run-queue', '--queue', 'wq', '--config', 'configs/loops/queues/wq.json', '--dispatcher', 'echo three >> file.txt');
+    const runs = await readdir(path.join(root, 'runtime/loops/wq/runs'));
+    const rerun = JSON.parse(await readFile(path.join(root, 'runtime/loops/wq/runs', runs.sort().at(-1)), 'utf8'));
+    assert.equal(rerun.worktree.setup.exitCode, 0, 'a requeued worktree task can run again');
+    assert.equal(rerun.worktree.reused, true);
+    assert.equal(await readFile(path.join(root, rerun.worktree.path, 'file.txt'), 'utf8'), 'one\ntwo\nthree\n', 'the rerun continues in the same worktree');
+
+    // Patch headers with git-quoted (non-ASCII) paths are recognised.
+    await writeFile(path.join(root, '项目.txt'), 'a\n'); git('add', '项目.txt'); git('commit', '-qm', 'cn');
+    await writeFile(path.join(root, '项目.txt'), 'b\n');
+    await writeFile(path.join(root, 'cn.patch'), git('diff'));
+    const planned = JSON.parse(loop(root, 'code-patch-apply-plan', '--patch', 'cn.patch', '--json').stdout);
+    assert.deepEqual(planned.diffFiles.map((file) => file.newPath), ['项目.txt']);
+    assert.equal(planned.dirtyAffected, true, 'the dirty-target check covers quoted paths');
+
+    // A stale handoff cannot take back a recovered and completed todo.
+    for (const id of ['A', 'B', 'C']) await registerAgent(root, { id, quota_grants: { default: 100 }, authority_grants: ['local'] });
+    await createTodo(root, { id: 't1', title: 'x', acceptance_contract: { c: 1 }, evidence_requirements: ['e'] });
+    const claimA = await claimTodo(root, { agent_id: 'A', lease_ms: 50 });
+    const packet = await handoffTodo(root, { todo_id: 't1', agent_id: 'A', target_agent_id: 'B', fencing_token: claimA.fencing_token });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await recoverTodos(root);
+    const claimC = await claimTodo(root, { agent_id: 'C' });
+    await releaseTodo(root, { todo_id: 't1', agent_id: 'C', fencing_token: claimC.fencing_token, completed: true, evidence: 'done' });
+    await assert.rejects(() => decideHandoff(root, { handoff_id: packet.id, agent_id: 'B', accept: true }), /Pending handoff not found/);
+
+    // Concurrent verified spend is never lost.
+    await Promise.all(Array.from({ length: 10 }, (_, index) => recordVerifiedSliceSpend(root, { status: 'completed', verified: true, slice_id: `slice-${index}`, spend: { tokens: 100 } })));
+    assert.equal((await readQuotaLedger(root)).spend.tokens, 1000);
+
+    // Redaction catches camelCase credentials but keeps counters visible.
+    for (const key of ['accessToken', 'Authorization', 'openaiApiKey', 'client_secret', 'api_token']) assert.equal(sensitiveKey(key), true, key);
+    for (const key of ['fencing_token', 'stale_fencing_tokens_accepted', 'max_tokens', 'token_count']) assert.equal(sensitiveKey(key), false, key);
+
+    // Evidence verdicts are derived, and a keyed seal cannot be forged.
+    const draft = { generated_at: '2026-10-10T00:00:00.000Z', passed: true, metrics: { error_rate: 0.5 }, thresholds: { error_rate: { max: 0 } }, scenarios: [{ status: 'passed' }], compatibility: [{ status: 'passed', runtime: 'x', contract_version: 1 }], limitations: [], evaluation: { checks: [] } };
+    const sealed = sealEvidence(draft);
+    assert.equal(sealed.passed, false, 'failing thresholds cannot be sealed as passed');
+    assert.equal(publicEvidenceSummary(sealed).passed, false);
+    assert.equal(evaluateEvidence(sealed).passed, false);
+    const keyed = sealEvidence({ ...draft, metrics: { error_rate: 0 } }, { key: 'secret-key' });
+    assert.equal(keyed.integrity.algorithm, 'hmac-sha256');
+    assert.equal(verifyEvidence(keyed, { key: 'secret-key' }).valid, true);
+    assert.equal(verifyEvidence(keyed).reason, 'hmac_key_required');
+    const forged = { ...keyed, metrics: { error_rate: 0.9 } };
+    assert.equal(verifyEvidence(forged, { key: 'secret-key' }).valid, false);
+
+    // A Feishu reply names the generation it answers.
+    await createHumanGate(root, { gate_id: 'gate_reply', project: 'p', task: 't', action: 'deploy', reason: 'r', impact: 'i', risk: { level: 'low' }, cost: { amount: 0, currency: 'CNY', budget: null }, evidence: [], dashboard_url: null, expiry: '2099-01-01T00:00:00.000Z', allowed_actors: ['ou_owner'], confirmation_required: false, source_bindings: [{ channel: 'feishu', message_id: 'card-9', reply_to: 'card-9', adapter: 'feishu' }] });
+    const reply = (text, eventId) => normalizeFeishuGateEvent({ header: { event_id: eventId }, event: { sender: { sender_id: { open_id: 'ou_owner' } }, message: { root_id: 'card-9', parent_id: 'card-9', content: JSON.stringify({ text }) } } }, { signatureVerified: true });
+    assert.equal((await handleChannelGateEvent(root, reply('/approve gate_reply', 'e1'))).outcome, 'generation_required');
+    assert.equal((await handleChannelGateEvent(root, reply('/approve gate_reply@1', 'e2'))).outcome, 'approved');
+    assert.equal((await getHumanGate(root, 'gate_reply')).status, 'approved');
   }
 
   console.log('safety regression self-test passed');

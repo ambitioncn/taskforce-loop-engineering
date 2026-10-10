@@ -400,8 +400,9 @@ LOOP_WORKDIR=/path/to/workspace \
   run-loop-cron.sh configs/loops/workspace-health.json
 ```
 
-Set `LOOP_ALERT_COMMAND` to a command that accepts one message argument if your
-environment should send an alert when the runner exits non-zero.
+Set `LOOP_ALERT_COMMAND` to a command (arguments allowed) if your environment
+should send an alert when the runner exits non-zero or the config cannot be
+read; the message is appended as one final argument.
 
 ## Adaptive Queue Scheduler
 

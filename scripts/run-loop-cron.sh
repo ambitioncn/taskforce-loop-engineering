@@ -14,7 +14,20 @@ fi
 mkdir -p "$LOG_DIR"
 cd "$WORKDIR"
 
-loop_id="$(node -e '
+# LOOP_ALERT_COMMAND may include arguments ("openclaw message send --target x");
+# the message is passed as one extra argument, never interpolated.
+alert() {
+  local message="$1" log="$2"
+  if [[ -n "$SEND_CMD" ]]; then
+    if ! sh -c "$SEND_CMD \"\$1\"" loop-alert "$message"; then
+      printf '[%s] alert command failed: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$SEND_CMD" >> "$log"
+    fi
+  else
+    printf '%s\n' "$message" >&2
+  fi
+}
+
+if ! loop_id="$(node -e '
 const fs = require("fs");
 const config = process.argv[1];
 try {
@@ -24,7 +37,13 @@ try {
 } catch {
   process.exit(2);
 }
-' "$CONFIG")"
+' "$CONFIG")"; then
+  stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  log_file="$LOG_DIR/loop-cron-invalid-config.log"
+  printf '[%s] %s: unreadable config or invalid id\n' "$stamp" "$CONFIG" >> "$log_file"
+  alert "Loop escalation ($stamp): $CONFIG is unreadable or has an invalid id; the loop did not run." "$log_file"
+  exit 2
+fi
 
 stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 log_file="$LOG_DIR/loop-cron-${loop_id}.log"
@@ -74,11 +93,7 @@ process.stdout.write(latest || "runner failed before writing a run artifact");
 ' "$loop_id")"
 
 message="Loop escalation ($stamp): $loop_id exit=$exit_code. $summary"
-if [[ -n "$SEND_CMD" ]]; then
-  "$SEND_CMD" "$message" || true
-else
-  printf '%s\n' "$message" >&2
-fi
+alert "$message" "$log_file"
 
 rm -f "$tmp_out"
 exit "$exit_code"

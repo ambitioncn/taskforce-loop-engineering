@@ -15,4 +15,6 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm install --ignore-scripts
       - run: npm test
-      - run: npm run check:competitive
+      - run: npm run check:adapters
+      - run: npm run check:production-trust
+      - run: npm run pack:dry
