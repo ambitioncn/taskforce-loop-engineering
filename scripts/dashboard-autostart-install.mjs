@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -25,11 +26,22 @@ function parseArgs(argv) {
   return out;
 }
 
+// WorkingDirectory= takes the path literally (systemd does not decode C
+// escapes there); only specifiers need escaping. Newlines cannot be encoded.
+function systemdWorkingDirectory(value) {
+  const text = String(value);
+  if (/[\n\r]/.test(text)) throw new Error('Workspace path must not contain a newline.');
+  return text.replace(/%/g, '%%');
+}
+
+// ExecStart= decodes C escapes, so escape every byte of the UTF-8 encoding
+// outside a safe set (a code point above 0xff is not a single \\x escape).
 function systemdEscapePath(value) {
-  return [...value].map((character) => {
-    if (/[A-Za-z0-9_/:.\-]/.test(character)) return character;
-    return `\\x${character.codePointAt(0).toString(16).padStart(2, '0')}`;
-  }).join('');
+  return [...Buffer.from(String(value))]
+    .map((byte) => /[A-Za-z0-9/_.:-]/.test(String.fromCharCode(byte))
+      ? String.fromCharCode(byte)
+      : `\\x${byte.toString(16).padStart(2, '0')}`)
+    .join('');
 }
 
 function run(command, args) {
@@ -49,7 +61,7 @@ if (args.help) {
   process.exit(0);
 }
 
-const packageRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const packageRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const cli = path.join(packageRoot, 'bin', 'loop-engineering.mjs');
 const userSystemdDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
 const dashboardUnit = 'loop-engineering-dashboard.service';
@@ -63,7 +75,7 @@ const host = args.listen === 'localhost' ? (args.host || '127.0.0.1') : await (a
   return addresses[0];
 })();
 const nonLoopback = args.listen === 'tailscale' ? ' --allow-non-loopback' : '';
-const service = `[Unit]\nDescription=Taskforce Loop Engineering read-only project workspace\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${systemdEscapePath(args.root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(cli)} dashboard-serve --root ${systemdEscapePath(args.root)} --host ${host} --port ${args.port}${nonLoopback}\nRestart=on-failure\nRestartSec=3s\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n`;
+const service = `[Unit]\nDescription=Taskforce Loop Engineering read-only project workspace\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${systemdWorkingDirectory(args.root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(cli)} dashboard-serve --root ${systemdEscapePath(args.root)} --host ${host} --port ${args.port}${nonLoopback}\nRestart=on-failure\nRestartSec=3s\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n`;
 const dropIn = `[Unit]\nWants=${dashboardUnit}\nAfter=${dashboardUnit}\n`;
 const report = {
   status: args.confirmInstall ? 'installed' : 'plan_only',

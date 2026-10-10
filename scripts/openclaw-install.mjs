@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -34,6 +35,14 @@ function resolveLanguage(requested = 'auto', env = process.env) {
 }
 
 const text = (language, en, zh) => language === 'zh' ? zh : en;
+
+// WorkingDirectory= takes the path literally (systemd does not decode C
+// escapes there); only specifiers need escaping. Newlines cannot be encoded.
+function systemdWorkingDirectory(value) {
+  const text = String(value);
+  if (/[\n\r]/.test(text)) throw new Error('Workspace path must not contain a newline.');
+  return text.replace(/%/g, '%%');
+}
 
 function systemdEscapePath(value) {
   return [...Buffer.from(String(value))]
@@ -262,7 +271,7 @@ process.stdout.write(JSON.stringify(result) + '\\n');
 }
 
 function schedulerServiceSource({ root, queue, language }) {
-  return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdEscapePath(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
+  return `[Unit]\nDescription=${text(language, `Taskforce Loop Engineering scheduler for ${queue}`, `${queue} 的 Taskforce Loop Engineering 调度器`)}\nAfter=default.target\n\n[Service]\nType=oneshot\nWorkingDirectory=${systemdWorkingDirectory(root)}\nExecStart=${systemdEscapePath(process.execPath)} ${systemdEscapePath(path.join(root, 'scripts', 'loops', 'openclaw-loop.mjs'))} scheduler-tick --json\n`;
 }
 
 function schedulerTimerSource({ queue, language }) {
@@ -337,7 +346,7 @@ async function main() {
   args.openclawBin = await resolveExecutable(args.openclawBin);
   const worker = await resolveWorkerAgent(args);
   args.workerAgent = worker.workerAgent;
-  args.loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+  args.loopBin = fileURLToPath(new URL('../bin/loop-engineering.mjs', import.meta.url));
   args.humanGateAdapter = new URL('../lib/human-gate-channel-adapter.mjs', import.meta.url).href;
   const systemdUserDir = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'systemd', 'user');
   const schedulerUnit = `openclaw-loop-${args.queue}-scheduler.service`;
@@ -403,7 +412,7 @@ async function main() {
     if (daemonReload.code !== 0) throw new Error(`Cannot reload user systemd units: ${(daemonReload.stderr || daemonReload.stdout).trim() || `exit ${daemonReload.code}`}`);
     const enableTimer = await run(args.systemctlBin, ['--user', 'enable', '--now', schedulerTimer], { cwd: args.root });
     if (enableTimer.code !== 0) throw new Error(`Cannot enable Loop scheduler timer ${schedulerTimer}: ${(enableTimer.stderr || enableTimer.stdout).trim() || `exit ${enableTimer.code}`}`);
-    const dashboardInstaller = new URL('./dashboard-autostart-install.mjs', import.meta.url).pathname;
+    const dashboardInstaller = fileURLToPath(new URL('./dashboard-autostart-install.mjs', import.meta.url));
     const dashboardInstall = await run(process.execPath, [dashboardInstaller, '--root', args.root, '--listen', args.dashboardListen, '--tailscale-bin', args.tailscaleBin, '--systemctl-bin', args.systemctlBin, '--confirm-install', '--json'], { cwd: args.root });
     if (dashboardInstall.code !== 0) throw new Error(`Cannot install Dashboard gateway autostart: ${(dashboardInstall.stderr || dashboardInstall.stdout).trim()}`);
     const instructions = await exists(files.instructions) ? await readFile(files.instructions, 'utf8') : '';

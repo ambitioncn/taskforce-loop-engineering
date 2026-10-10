@@ -90,6 +90,7 @@ const timer = await readFile(timerFile, 'utf8');
 if (!service.includes('scheduler-tick') || !timer.includes('OnUnitActiveSec=1min')) throw new Error('scheduler systemd units were not installed');
 if (!(await readFile(dashboardServiceFile, 'utf8')).includes('dashboard-serve') || !(await readFile(dashboardDropIn, 'utf8')).includes('Wants=loop-engineering-dashboard.service')) throw new Error('OpenClaw installer did not install Dashboard gateway autostart');
 if (service.includes('WorkingDirectory="') || service.includes('ExecStart="') || !service.includes('\\x20') || !service.includes('\\xe5\\xae\\x89\\xe8\\xa3\\x85')) throw new Error('scheduler service paths were not encoded with systemd path escapes');
+if (service.match(/^WorkingDirectory=(.*)$/m)?.[1] !== root) throw new Error('WorkingDirectory must be the literal workspace path; systemd does not decode escapes there');
 const systemdVerify = await new Promise((resolve) => {
   const child = spawn('systemd-analyze', ['verify', serviceFile, timerFile], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = ''; child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -16,7 +17,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log('Usage: loop-engineering-hermes-smoke [--root workspace] [--queue agent-tasks] [--hermes-bin hermes] [--loop-bin loop-engineering] [--keep-artifacts] [--json]'); return; }
   safeId(args.queue); const runToken = `${Date.now()}-${process.pid}`; const smokeQueue = `smoke-${args.queue}-${runToken}`;
-  const baseConfig = path.join(args.root, `configs/loops/queues/${args.queue}.json`); const smokeConfig = path.join(args.root, `configs/loops/queues/${smokeQueue}.json`); const smokeRuntime = path.join(args.root, 'runtime', 'loops', smokeQueue); const doctorScript = new URL('./hermes-doctor.mjs', import.meta.url).pathname;
+  const baseConfig = path.join(args.root, `configs/loops/queues/${args.queue}.json`); const smokeConfig = path.join(args.root, `configs/loops/queues/${smokeQueue}.json`); const smokeRuntime = path.join(args.root, 'runtime', 'loops', smokeQueue); const doctorScript = fileURLToPath(new URL('./hermes-doctor.mjs', import.meta.url));
   const steps = []; let taskId = null;
   try {
     const doctor = await run(process.execPath, [doctorScript, '--root', args.root, '--queue', args.queue, '--hermes-bin', args.hermesBin, '--json'], { cwd: args.root }); steps.push({ id: 'doctor', ok: doctor.code === 0 }); if (doctor.code !== 0) throw new Error(`doctor failed: ${doctor.stderr || doctor.stdout}`);

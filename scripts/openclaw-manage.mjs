@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -71,7 +72,7 @@ async function main() {
     plan.status = 'uninstalled'; plan.readOnly = false;
   } else if (args.action === 'upgrade') {
     if (!plan.ready) throw new Error(`Refusing upgrade because managed content changed: ${[...modified, ...(!instructionsClean ? ['AGENTS.md managed block'] : [])].join(', ')}`);
-    const installer = new URL('./openclaw-install.mjs', import.meta.url).pathname;
+    const installer = fileURLToPath(new URL('./openclaw-install.mjs', import.meta.url));
     const result = await new Promise((resolve) => {
       const child = spawn(process.execPath, [installer, '--root', args.root, '--queue', manifest.queue, '--worker-agent', manifest.workerAgent, '--language', manifest.language || 'en', '--openclaw-bin', manifest.openclawBin || 'openclaw', '--systemctl-bin', manifest.systemctlBin || 'systemctl', '--confirm-install', '--force', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = ''; child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
