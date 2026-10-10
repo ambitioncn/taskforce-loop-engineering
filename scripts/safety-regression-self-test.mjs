@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { enqueueTask, ensureQueueDirs, queueCancel, queueRequeue, runCommand, runQueueOnce, queueStatus } from '../lib/core.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +110,81 @@ try {
     assert.equal((await readFile(path.join(root, 'big3.txt'), 'utf8')).startsWith('X0\n'), true, 'edits before the truncation window survive');
     assert.equal((await readFile(path.join(root, 'NEW_FILE.txt'), 'utf8')), '新文件\n', 'the exported new file round-trips');
   }
+  // Queue engine crash safety and exactly-once execution.
+  {
+    const spawnFailure = await runCommand('echo hi', { cwd: '/nonexistent-loop-dir' });
+    assert.equal(spawnFailure.exitCode, 127, 'a spawn failure is a failed command, not a crash');
+    assert.equal((await runCommand('echo \0')).exitCode, 127);
+
+    const root = await tempRoot('queue');
+    const queue = 'q';
+    const queueDir = path.join(root, 'runtime/loops', queue);
+    await ensureQueueDirs(root, queue);
+    const log = path.join(root, 'exec.log');
+    const list = async (subdir) => (await readdir(path.join(queueDir, subdir))).filter((name) => name.endsWith('.json')).sort();
+    const executions = async () => (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+
+    // Concurrent enqueues with the same (non-ASCII) title never overwrite.
+    const enqueued = await Promise.all(Array.from({ length: 6 }, () => enqueueTask(root, { queue, title: '部署', task: 'x' })));
+    assert.equal(new Set(enqueued.map((entry) => entry.task.id)).size, 6);
+    assert.equal((await list('inbox')).length, 6);
+    for (const name of await list('inbox')) await rm(path.join(queueDir, 'inbox', name));
+
+    // A truncated queued task is quarantined instead of blocking the queue.
+    await writeFile(path.join(queueDir, 'inbox', '0000_partial.json'), '{"id":"0000_par');
+    const good = await enqueueTask(root, { queue, title: 'good', task: 'x' });
+    let result = await runQueueOnce(root, { queue, dispatcher: `echo "$LOOP_TASK_ID" >> ${JSON.stringify(log)}` });
+    assert.equal(result.processed, true);
+    assert.deepEqual(await executions(), [good.task.id]);
+    assert.equal((await readdir(path.join(queueDir, 'quarantine'))).some((name) => name.endsWith('0000_partial.json')), true);
+
+    // An empty lock is respected while fresh and reclaimed once stale.
+    const lockFile = path.join(queueDir, 'queue.lock');
+    await writeFile(lockFile, '');
+    await enqueueTask(root, { queue, title: 'after-lock', task: 'x' });
+    assert.equal((await runQueueOnce(root, { queue, dispatcher: 'true' })).status, 'locked');
+    const old = new Date(Date.now() - 120000);
+    await utimes(lockFile, old, old);
+    assert.equal((await runQueueOnce(root, { queue, dispatcher: 'true' })).processed, true, 'a stale unreadable lock is reclaimed');
+
+    // A stale active copy of a finished task is quarantined, not re-run, and
+    // a task that keeps crashing its runner stops being recovered.
+    const finished = (await list('failed'))[0] ?? (await list('done'))[0];
+    const finishedDir = (await list('failed')).includes(finished) ? 'failed' : 'done';
+    await writeFile(path.join(queueDir, 'active', finished), await readFile(path.join(queueDir, finishedDir, finished)));
+    await writeFile(path.join(queueDir, 'active', 'crashy.json'), JSON.stringify({ version: 1, id: 'crashy', queue, title: 'crashy', body: 'x', status: 'active', orphanRecoveryCount: 3 }));
+    result = await runQueueOnce(root, { queue, dispatcher: `echo "$LOOP_TASK_ID" >> ${JSON.stringify(log)}` });
+    assert.deepEqual(result.orphanRecovered.map((entry) => entry.outcome).sort(), ['orphan_recovery_exhausted', 'quarantined_duplicate']);
+    assert.equal((await executions()).includes('crashy'), false);
+    assert.equal((await list('failed')).includes('crashy.json'), true);
+
+    // The lease is renewed while a dispatch outlasts leaseMs, so a second
+    // runner cannot reclaim the lock and execute the same task again.
+    const slow = await enqueueTask(root, { queue, title: 'slow', task: 'x' });
+    const first = runQueueOnce(root, { queue, leaseMs: 300, dispatcher: `echo "$LOOP_TASK_ID" >> ${JSON.stringify(log)}; sleep 1.5` });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.equal((await runQueueOnce(root, { queue, leaseMs: 300, dispatcher: `echo "$LOOP_TASK_ID" >> ${JSON.stringify(log)}` })).status, 'locked');
+    await first;
+    assert.equal((await executions()).filter((id) => id === slow.task.id).length, 1);
+
+    // Canceling an active task stops its dispatcher and leaves one copy.
+    const victim = await enqueueTask(root, { queue, title: 'victim', task: 'x' });
+    const running = runQueueOnce(root, { queue, dispatcher: `sleep 1.5; echo "$LOOP_TASK_ID finished" >> ${JSON.stringify(log)}` });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await queueCancel(root, queue, victim.task.id, { includeActive: true, reason: 'test' });
+    const canceledRun = await running;
+    assert.equal((await executions()).includes(`${victim.task.id} finished`), false, 'the dispatcher was stopped');
+    assert.equal(canceledRun.run?.movedByOperator ?? JSON.parse(await readFile(path.join(root, canceledRun.runPath), 'utf8')).movedByOperator, true);
+    assert.deepEqual([...await list('done'), ...await list('failed')].filter((name) => name.startsWith(victim.task.id)), []);
+    assert.equal(JSON.parse(await readFile(path.join(queueDir, 'canceled', `${victim.task.id}.json`), 'utf8')).cancelReason, 'test');
+
+    // Its stop marker must not supersede the task again after a requeue.
+    await queueRequeue(root, queue, victim.task.id, { from: 'canceled' });
+    await runQueueOnce(root, { queue, dispatcher: `echo "$LOOP_TASK_ID rerun" >> ${JSON.stringify(log)}` });
+    assert.equal((await executions()).includes(`${victim.task.id} rerun`), true, 'a requeued task runs despite an old stop marker');
+    assert.equal((await queueStatus(root, queue)).active, 0);
+  }
+
   console.log('safety regression self-test passed');
 } finally {
   for (const root of roots) await rm(root, { recursive: true, force: true });
