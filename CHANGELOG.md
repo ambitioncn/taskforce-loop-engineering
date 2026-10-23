@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.1 - 2026-10-23
+
 - Restrict terminal-lock governance exemptions to accepted, gate-free later reviews. A `needs_human_acceptance` project label no longer hides current blockers or failed acceptance; protect ordinary retries and context recovery with terminal-checkpoint regressions through both core and installed mock dispatchers.
 
 - Select effective checkpoint reviews using explicit numeric sequence and checkpoint timestamps, never ID suffixes or review-generation order. Preserve unresolved blockers under missing/conflicting chronology in both task and milestone paths; count milestone coverage once and keep terminal acceptance from hiding unordered/current-task blockers.
