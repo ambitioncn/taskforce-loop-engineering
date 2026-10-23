@@ -73,6 +73,29 @@ if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTick
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('Use Loop Engineering to fix this issue') || !instructions.includes('Queue this only; do not run it yet') || /走 loop|只入队|只排队/.test(instructions)) throw new Error('English conversation instructions are missing or contain Chinese routing examples');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
+// A slow worker must outlive its routing caller, retaining observable output.
+const fakeLoop = path.join(root, 'slow-loop.mjs');
+const asyncWrapper = path.join(root, 'async-wrapper.mjs');
+const workerDone = path.join(root, 'worker-done');
+await writeFile(fakeLoop, `import { writeFile } from 'node:fs/promises';
+if (process.argv[2] === 'run-queue') {
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  await writeFile(${JSON.stringify(workerDone)}, 'done');
+}
+`);
+await writeFile(asyncWrapper, wrapper.replace(/spawn\(process\.execPath, \["[^"]+"/, 'spawn(process.execPath, [' + JSON.stringify(fakeLoop)));
+const launchStart = Date.now();
+const launched = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [asyncWrapper, 'route', '--message', 'Use loop: slow task', '--source-channel', 'feishu', '--source-target', 'test', '--source-account', 'default', '--source-message-id', 'test-launch'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', x => stdout += x); child.stderr.on('data', x => stderr += x);
+  child.on('error', reject); child.on('close', code => resolve({ code, stdout, stderr }));
+});
+if (launched.code !== 0 || Date.now() - launchStart >= 3000 || !launched.stdout.includes('worker_started')) throw new Error('routing waited for slow worker: ' + launched.stderr);
+const receipt = JSON.parse(launched.stdout.trim());
+if (receipt.accepted !== false || !receipt.pid || !receipt.log) throw new Error('launch receipt misrepresents acceptance');
+while (Date.now() - launchStart < 8000 && !(await readFile(workerDone, 'utf8').catch(() => ''))) await new Promise(resolve => setTimeout(resolve, 100));
+if (await readFile(workerDone, 'utf8') !== 'done') throw new Error('background worker did not finish');
 if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('queue') || !wrapper.includes('continue') || /只入队|只排队|继续当前/.test(wrapper) || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, localization, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
 if (!wrapper.includes('process.exitCode = tickCode;') || wrapper.includes('process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;')) throw new Error('scheduler health still depends on notification delivery');
 const missingSourceRoute = await new Promise((resolve) => {
