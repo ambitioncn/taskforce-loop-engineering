@@ -306,10 +306,11 @@ try {
     // A stale handoff cannot take back a recovered and completed todo.
     for (const id of ['A', 'B', 'C']) await registerAgent(root, { id, quota_grants: { default: 100 }, authority_grants: ['local'] });
     await createTodo(root, { id: 't1', title: 'x', acceptance_contract: { c: 1 }, evidence_requirements: ['e'] });
-    const claimA = await claimTodo(root, { agent_id: 'A', lease_ms: 50 });
+    const claimA = await claimTodo(root, { agent_id: 'A', lease_ms: 60_000 });
     const packet = await handoffTodo(root, { todo_id: 't1', agent_id: 'A', target_agent_id: 'B', fencing_token: claimA.fencing_token });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await recoverTodos(root);
+    // Expire deterministically through the recovery clock, not a 50 ms race
+    // between filesystem operations on a shared CI runner.
+    await recoverTodos(root, { now: Date.parse(claimA.todo.claim.lease_expires_at) + 1 });
     const claimC = await claimTodo(root, { agent_id: 'C' });
     await releaseTodo(root, { todo_id: 't1', agent_id: 'C', fencing_token: claimC.fencing_token, completed: true, evidence: 'done' });
     await assert.rejects(() => decideHandoff(root, { handoff_id: packet.id, agent_id: 'B', accept: true }), /Pending handoff not found/);
