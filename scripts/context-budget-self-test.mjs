@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { contextPolicy, contextRotation, openClawContextUsage, readBoundedJson } from '../lib/context-budget.mjs';
-import { dispatchFailureClassification, enqueueTask, runQueueOnce } from '../lib/core.mjs';
+import { dispatchFailureClassification, enqueueTask, runQueueOnce, queueCancel } from '../lib/core.mjs';
 
 const policy = contextPolicy();
 assert.equal(contextRotation(null, 2, policy).rotate, false);
@@ -90,6 +90,7 @@ if (original !== scenario) { console.error(original.endsWith('-human-error') ? '
     if (scenario === 'oversized') assert.equal(await readBoundedJson(path.join(root, 'nonexistent')), null);
   }
   // A durable blocker must survive the window before handoff creation.
+  for (const chronology of ['single', 'arbitrary-id', 'id-restart', 'missing', 'conflict']) {
   for (const failure of ['overflow', 'abandoned', 'exhausted', 'ordinary', 'ordinary-single']) {
     const root = await mkdtemp(path.join(tmpdir(), 'loop-context-no-handoff-'));
     roots.push(root);
@@ -99,7 +100,11 @@ import path from 'node:path';
 const e = process.env;
 await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
 const plan = JSON.parse(await readFile(e.LOOP_DEV_PLAN_FILE, 'utf8'));
-for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, cp.id + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: cp.id, status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
+const chronology = ${JSON.stringify(chronology)};
+const oldId = chronology === 'id-restart' ? 'cp99' : 'cp1';
+const newId = chronology === 'id-restart' ? 'cp1' : 'progress-latest';
+if (chronology !== 'single') await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, oldId + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, checkpoint_id: oldId, sequence: chronology === 'missing' ? undefined : chronology === 'conflict' ? 3 : 1, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:00:00Z', status: 'in_progress', summary: 'Old progress', blockers: [], risks: [], verification: [] }));
+for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, (chronology === 'single' ? cp.id : newId) + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: chronology === 'single' ? cp.id : newId, sequence: chronology === 'missing' ? undefined : 2, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:01:00Z', status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
 console.error(${JSON.stringify(failure === 'abandoned' ? '"kind": "incomplete_turn"' : failure.startsWith('ordinary') ? 'generic worker failure' : 'context_length_exceeded')});
 process.exitCode = ${failure === 'abandoned' ? 0 : 1};`);
     await enqueueTask(root, { queue: 'test', title: 'blocker before handoff', task: 'Inspect local mocked data' });
@@ -115,6 +120,63 @@ process.exitCode = ${failure === 'abandoned' ? 0 : 1};`);
     assert.equal(task.runtimeRecoveryCount ?? 0, 0, 'blocked work must not consume recovery');
     assert.equal((await runQueueOnce(root, options)).processed, false, 'no replay without a handoff either');
   }
+  }
+  // After one legitimate recovery, newly durable blockers stop the next run.
+  for (const failure of ['ordinary', 'overflow']) {
+    const root = await mkdtemp(path.join(tmpdir(), 'loop-recovered-blocker-'));
+    roots.push(root);
+    const worker = path.join(root, 'worker.mjs');
+    await writeFile(worker, `import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const e = process.env;
+if (Number(e.LOOP_SESSION_GENERATION) > 0) {
+  await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
+  for (const [id, sequence, blockers] of [['cp99', 1, []], ['progress-latest', 2, ['Unknown payment outcome']]]) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, id + '.json'), JSON.stringify({task_id:e.LOOP_TASK_ID, checkpoint_id:id, sequence, status:blockers.length ? 'needs_human_input' : 'in_progress', blockers, risks:[], verification:[]}));
+}
+console.error(Number(e.LOOP_SESSION_GENERATION) > 0 && ${JSON.stringify(failure)} === 'ordinary' ? 'generic failure' : 'context_length_exceeded');
+process.exitCode = 1;`);
+    await enqueueTask(root, { queue: 'test', title: 'recovered blocker', task: 'Inspect mocked local data' });
+    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    assert.equal((await runQueueOnce(root, options)).status, 'runtime_interrupted');
+    const result = await runQueueOnce(root, options);
+    assert.equal(result.status, 'needs_human_input');
+    assert.equal(result.run.dispatchAttempts.length, 1);
+    assert.equal(result.run.revisionRequest, null);
+    const task = JSON.parse(await readFile(path.join(root, result.taskPath), 'utf8'));
+    assert.equal(task.runtimeSessionGeneration, 1);
+    assert.equal(task.runtimeRecoveryCount, 1);
+    assert.equal((await runQueueOnce(root, options)).processed, false);
+  }
+  // Cancellation takes precedence even with a blocker and invalid handoff.
+  {
+    const root = await mkdtemp(path.join(tmpdir(), 'loop-cancel-blocker-'));
+    roots.push(root);
+    const worker = path.join(root, 'worker.mjs');
+    const marker = path.join(root, 'ready');
+    await writeFile(worker, `import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const e = process.env;
+await mkdir(e.LOOP_CHECKPOINTS_DIR, {recursive:true});
+await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, 'pending.json'), JSON.stringify({ task_id:e.LOOP_TASK_ID, checkpoint_id:'pending', status:'needs_human_input', blockers:['Unknown outcome'] }));
+await writeFile(e.LOOP_CONTEXT_HANDOFF_FILE, '{}');
+await writeFile(${JSON.stringify(marker)}, 'ready');
+setInterval(() => {}, 1000);`);
+    const queued = await enqueueTask(root, { queue: 'test', title: 'cancel blocker', task: 'Inspect mocked local data' });
+    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3 }, timeoutMs: 5000, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const running = runQueueOnce(root, options);
+    let ready = false;
+    for (let i = 0; i < 200 && !ready; i++) {
+      ready = await readFile(marker, 'utf8').then(() => true, () => false);
+      if (!ready) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(ready, true);
+    await queueCancel(root, 'test', queued.task.id, { includeActive: true, reason: 'cancel regression' });
+    const result = await running;
+    assert.equal(result.status, 'superseded');
+    assert.equal(result.run.dispatchAttempts.length, 1);
+    assert.equal(result.run.revisionRequest, null);
+    assert.equal((await runQueueOnce(root, options)).processed, false);
+  }
   // Ordinary failures still retry without blockers, or after a later snapshot
   // resolves a historical blocker. Test through the real dispatch loop.
   for (const scenario of ['absent', 'resolved']) {
@@ -127,7 +189,7 @@ const e = process.env;
 await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
 if (${JSON.stringify(scenario)} === 'resolved') {
   for (const [id, blockers] of [['cp1', ['Await approval']], ['cp2', []]]) {
-    await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, id + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: id, status: blockers.length ? 'needs_human_input' : 'in_progress', summary: 'Local progress', blockers, verification: [], risks: [], next_action: 'Continue local verification' }));
+    await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, id + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: id, sequence: id === 'cp1' ? 1 : 2, status: blockers.length ? 'needs_human_input' : 'in_progress', summary: 'Local progress', blockers, verification: [], risks: [], next_action: 'Continue local verification' }));
   }
 }
 console.error('generic worker failure');

@@ -3,6 +3,8 @@ import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import assert from 'node:assert/strict';
+import { enqueueTask, runQueueOnce } from '../lib/core.mjs';
 
 const root = await mkdtemp(path.join(tmpdir(), 'loop openclaw 安装-'));
 const deliveryCapture = path.join(root, 'delivery.json');
@@ -25,6 +27,11 @@ else {
   if (args[0] === 'agent' && process.env.LOOP_CHECKPOINTS_DIR) {
     const dir = path.resolve(process.cwd(), process.env.LOOP_CHECKPOINTS_DIR);
     await mkdir(dir, { recursive: true });
+    if (process.env.LOOP_REVIEW_TEST) {
+      for (const [id, sequence, blockers] of [['cp99', 1, []], ['progress-latest', 2, ['Unknown external outcome']]]) await writeFile(path.join(dir, id + '.json'), JSON.stringify({ task_id: process.env.LOOP_TASK_ID, checkpoint_id: id, sequence, status: blockers.length ? 'needs_human_input' : 'in_progress', summary: 'Mock progress', blockers, risks: [], verification: [] }));
+      console.error(process.env.LOOP_REVIEW_TEST === 'overflow' ? 'context_length_exceeded' : 'generic worker failure');
+      process.exit(1);
+    }
     await writeFile(path.join(dir, 'cp1.json'), JSON.stringify({ version: 1, task_id: process.env.LOOP_TASK_ID, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Read-only smoke completed.', files_changed: [], verification: [{ command: 'mock smoke', outcome: 'passed' }], blockers: [], risks: [], next_action: 'acceptance_review' }));
   }
   if (process.env.DELIVERY_CAPTURE) await writeFile(process.env.DELIVERY_CAPTURE, JSON.stringify(args));
@@ -87,6 +94,17 @@ if (largeDispatch.code !== 0) throw new Error('generated context dispatcher fail
 const largeArgs = JSON.parse(await readFile(largeCapture, 'utf8'));
 const largePrompt = largeArgs[largeArgs.indexOf('--message') + 1];
 if (Buffer.byteLength(largePrompt) > 16384 || !largePrompt.includes(largeTaskFile) || !largePrompt.includes('CONTEXT BUDGET') || !largeArgs.includes('agent:builder:loop-task-large-task-g3')) throw new Error('generated dispatcher lost bounded prompt, file reference, context instructions or session generation');
+// The generated dispatcher/observer must preserve checkpoint gating through
+// actual queue retries and overflow recovery, not just prompt source checks.
+for (const failure of ['ordinary', 'overflow']) {
+  await enqueueTask(root, { queue: 'review-order', title: failure, task: 'Inspect mocked local data' });
+  const options = { queue: 'review-order', dispatcher: `LOOP_REVIEW_TEST=${failure} node scripts/loops/openclaw-loop-dispatch.mjs`, retry: { ...queue.retry, maxAttempts: 3 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+  const result = await runQueueOnce(root, options);
+  assert.equal(result.status, 'needs_human_input');
+  assert.equal(result.run.dispatchAttempts.length, 1);
+  assert.equal(result.run.revisionRequest, null);
+  assert.equal((await runQueueOnce(root, options)).processed, false);
+}
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('Use Loop Engineering to fix this issue') || !instructions.includes('Queue this only; do not run it yet') || /走 loop|只入队|只排队/.test(instructions)) throw new Error('English conversation instructions are missing or contain Chinese routing examples');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');

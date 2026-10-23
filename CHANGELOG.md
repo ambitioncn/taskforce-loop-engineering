@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Select effective checkpoint reviews using explicit numeric sequence and checkpoint timestamps, never ID suffixes or review-generation order. Preserve unresolved blockers under missing/conflicting chronology in both task and milestone paths; count milestone coverage once and keep terminal acceptance from hiding unordered/current-task blockers.
+
 - Check effective blocked checkpoints before each ordinary dispatch retry, even without a handoff. Preserve human-blocked classification for ordinary/verification failures without creating development revisions; resolved historical blockers still allow retries.
 
 - Stop runtime recovery and requeueing when an effective checkpoint review is blocked, including interruption before handoff creation; retain recovery after historical blockers are resolved.
