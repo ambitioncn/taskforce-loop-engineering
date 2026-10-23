@@ -24,14 +24,15 @@ assert.equal(dispatchFailureClassification({ exitCode: 1, stderr: 'Permission de
 
 const roots = [];
 try {
-  for (const scenario of ['yield', 'stale', 'malformed', 'missing-checkpoint', 'checkpoint-gate', 'pending-action', 'overflow', 'human-error', 'oversized', 'project-soft', 'project-hard', 'project-no-usage', 'terminal']) {
+  for (const scenario of ['yield', 'stale', 'malformed', 'missing-checkpoint', 'checkpoint-gate', 'pending-action', 'overflow', 'human-error', 'oversized', 'project-soft', 'project-hard', 'project-no-usage', 'terminal', 'pending-action-overflow', 'checkpoint-gate-overflow', 'stale-overflow', 'malformed-overflow', 'yield-overflow', 'yield-human-error', 'pending-action-failure']) {
     const root = await mkdtemp(path.join(tmpdir(), 'loop-context-'));
     roots.push(root);
     const worker = path.join(root, 'worker.mjs');
     await writeFile(worker, `import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const e = process.env;
-const scenario = ${JSON.stringify(scenario)};
+const original = ${JSON.stringify(scenario)};
+const scenario = original.replace(/-(overflow|human-error|failure)$/, '');
 if (scenario === 'overflow' || scenario === 'human-error') {
   console.error(scenario === 'human-error' ? 'Permission denied; context_length_exceeded' : 'context_length_exceeded');
   process.exit(1);
@@ -48,6 +49,7 @@ if (scenario.startsWith('project-') || scenario === 'terminal') {
 if (scenario !== 'missing-checkpoint') await writeFile(checkpoint, JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: e.LOOP_RUN_ID, status: scenario === 'checkpoint-gate' ? 'needs_human_input' : 'in_progress', summary: 'bounded progress', blockers: scenario === 'checkpoint-gate' ? ['Need approval'] : [], verification: [], risks: [], next_action: 'continue' }));
 const handoff = { version: 1, taskId: e.LOOP_TASK_ID, runId: scenario === 'stale' ? 'old-run' : e.LOOP_RUN_ID, generation: Number(e.LOOP_SESSION_GENERATION), attempt: Number(e.LOOP_ATTEMPT), reason: 'context_budget', checkpoint, summary: 'progress', completed: ['read source'], remaining: ['verify changes'], evidence: [checkpoint], nextAction: 'inspect test', authority: 'local only', pendingActions: scenario === 'pending-action' ? ['unknown payment outcome'] : [], blockers: [] };
 await writeFile(e.LOOP_CONTEXT_HANDOFF_FILE, scenario === 'malformed' ? '{' : scenario === 'oversized' ? ' '.repeat(17000) : JSON.stringify(handoff));
+if (original !== scenario) { console.error(original.endsWith('-human-error') ? 'Permission denied; context_length_exceeded' : original.endsWith('-failure') ? 'generic failure' : 'context_length_exceeded'); process.exitCode = 1; }
 `);
     await enqueueTask(root, { queue: 'test', title: scenario, task: 'Inspect a local file, then continue verification.' });
     const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3, runtimeRecoveryMaxAttempts: 2 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
@@ -70,7 +72,7 @@ await writeFile(e.LOOP_CONTEXT_HANDOFF_FILE, scenario === 'malformed' ? '{' : sc
     } else if (scenario === 'terminal') {
       assert.equal(first.status, 'completed');
       assert.equal((await runQueueOnce(root, options)).processed, false, 'high token usage cannot replay completed work');
-    } else if (['yield', 'overflow'].includes(scenario)) {
+    } else if (['yield', 'overflow', 'yield-overflow'].includes(scenario)) {
       assert.equal(first.status, 'runtime_interrupted', scenario);
       const task = JSON.parse(await readFile(path.join(root, first.taskPath), 'utf8'));
       assert.equal(task.runtimeSessionGeneration, 1);
@@ -80,8 +82,9 @@ await writeFile(e.LOOP_CONTEXT_HANDOFF_FILE, scenario === 'malformed' ? '{' : sc
       assert.equal(second.status, 'runtime_interrupted');
       const third = await runQueueOnce(root, options);
       assert.equal(third.status, 'runtime_blocked', 'recovery is bounded');
-    } else if (['pending-action', 'checkpoint-gate', 'human-error'].includes(scenario)) {
+    } else if (['pending-action', 'checkpoint-gate', 'human-error', 'pending-action-overflow', 'checkpoint-gate-overflow', 'yield-human-error', 'pending-action-failure'].includes(scenario)) {
       assert.equal(first.status, 'needs_human_input', scenario);
+      assert.equal((await runQueueOnce(root, options)).processed, false, 'blocked work cannot auto-replay');
     } else assert.equal(first.status, 'runtime_blocked', scenario);
     if (scenario !== 'terminal') assert.notEqual(first.status, 'completed');
     if (scenario === 'oversized') assert.equal(await readBoundedJson(path.join(root, 'nonexistent')), null);
@@ -108,6 +111,28 @@ process.exitCode = await observeOpenClawWorker(child);`);
     assert.equal(report.generation, 2);
     assert.equal(report.attempt, 1);
     assert.equal(report.usage?.usedTokens ?? null, scenario === 'json' ? 60 : null);
+  }
+  // Real observer + real queue: early human signals cannot be lost to tail
+  // clipping, even across chunks/UTF-8 boundaries or with custom retry policy.
+  for (const [signal, channel, retry] of [
+    ['Permission denied', 'stderr', {}],
+    ['需要用户确认', 'stdout', {}],
+    ['CUSTOM_APPROVAL', 'stderr', { requiresHumanActionPatterns: ['CUSTOM_APPROVAL'] }],
+    ['context_length_exceeded', 'stderr', {}]
+  ]) {
+    const root = await mkdtemp(path.join(tmpdir(), 'loop-context-signals-'));
+    roots.push(root);
+    const worker = path.join(root, 'worker.mjs');
+    await writeFile(worker, `import { spawn } from 'node:child_process';
+import { observeOpenClawWorker } from ${JSON.stringify(new URL('../lib/context-budget.mjs', import.meta.url).href)};
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(`const bytes = Buffer.from(${JSON.stringify(signal)}); (async () => { for (const byte of bytes) { process.${channel}.write(Buffer.from([byte])); await new Promise(r => setTimeout(r, 2)); } process.${channel}.write('x'.repeat(100000)); process.stderr.write('context_length_exceeded'); process.exitCode = 1; })();`)}], { stdio: ['ignore', 'pipe', 'pipe'] });
+process.exitCode = await observeOpenClawWorker(child);`);
+    await enqueueTask(root, { queue: 'test', title: 'signal preservation', task: 'Inspect local source' });
+    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3, ...retry }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const result = await runQueueOnce(root, options);
+    assert.equal(result.status, signal === 'context_length_exceeded' ? 'runtime_interrupted' : 'needs_human_input');
+    assert.equal(result.run.dispatchAttempts.length, 1);
+    if (signal !== 'context_length_exceeded') assert.equal((await runQueueOnce(root, options)).processed, false);
   }
   console.log('Context budget: thresholds, telemetry, handoff binding, gates, overflow and bounded recovery passed.');
 } finally { await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); }
