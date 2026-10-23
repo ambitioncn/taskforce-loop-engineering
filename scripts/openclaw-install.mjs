@@ -192,7 +192,7 @@ async function launchWorker() {
   const log = 'runtime/loops/${queue}/launches/' + Date.now() + '-' + process.pid + '.log';
   const fd = openSync(log, 'wx', 0o600);
   try {
-    const child = spawn(process.execPath, [process.argv[1], 'run-once'], {
+    const child = spawn(process.execPath, [process.argv[1], 'run-background'], {
       cwd: process.cwd(), env: process.env, detached: true, stdio: ['ignore', fd, fd]
     });
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
@@ -200,20 +200,47 @@ async function launchWorker() {
     console.log(JSON.stringify({ status: 'worker_started', pid: child.pid, log, accepted: false }));
   } finally { closeSync(fd); }
 }
-function run(args) {
+function run(args, inspectLock = false) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [${JSON.stringify(loopBin)}, ...args], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
-    child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+    const child = spawn(process.execPath, [${JSON.stringify(loopBin)}, ...args], {
+      cwd: process.cwd(), env: process.env,
+      stdio: inspectLock ? ['ignore', 'pipe', 'inherit'] : 'inherit'
+    });
+    let stdout = ''; let overflow = false;
+    if (inspectLock) child.stdout.on('data', (chunk) => {
+      process.stdout.write(chunk);
+      if (stdout.length + chunk.length <= 1024 * 1024 && !overflow) stdout += chunk;
+      else { stdout = ''; overflow = true; }
+    });
+    child.on('error', (error) => {
+      console.error(error.message);
+      resolve(inspectLock ? { code: 1, locked: false } : 1);
+    });
+    child.on('close', (code, signal) => {
+      code = code ?? (signal ? 128 : 1);
+      let result;
+      if (inspectLock && !overflow) { try { result = JSON.parse(stdout); } catch {} }
+      resolve(inspectLock ? { code, locked: code === 2 && result?.status === 'locked' && result?.processed === false } : code);
+    });
   });
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runWhenUnlocked(args, waitMs = 300000) {
   const deadline = Date.now() + waitMs;
+  let attempts = 0;
   while (true) {
-    const code = await run(args);
-    if (code !== 2 || Date.now() >= deadline) return code;
-    await wait(250);
+    const result = await run([...args, '--json'], true);
+    attempts++;
+    // Exit 2 also represents preflight/gate failures: never retry those.
+    if (!result.locked) return result.code;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      console.error(JSON.stringify({ status: 'worker_lock_wait_timeout', attempts, waitMs, accepted: false }));
+      return result.code;
+    }
+    console.log(JSON.stringify({ status: 'worker_waiting_for_lock', attempts, accepted: false }));
+    await wait(Math.min(250, remaining));
   }
 }
 if (command === 'route') {
@@ -248,8 +275,9 @@ if (command === 'route') {
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = routeCode || runCode || humanNotifyCode || terminalNotifyCode;
-} else if (command === 'run-once') {
-  const runCode = await run(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
+} else if (command === 'run-once' || command === 'run-background') {
+  const execute = command === 'run-background' ? runWhenUnlocked : run;
+  const runCode = await execute(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = runCode || humanNotifyCode || terminalNotifyCode;

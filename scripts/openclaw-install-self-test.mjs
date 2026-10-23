@@ -96,6 +96,58 @@ const receipt = JSON.parse(launched.stdout.trim());
 if (receipt.accepted !== false || !receipt.pid || !receipt.log) throw new Error('launch receipt misrepresents acceptance');
 while (Date.now() - launchStart < 8000 && !(await readFile(workerDone, 'utf8').catch(() => ''))) await new Promise(resolve => setTimeout(resolve, 100));
 if (await readFile(workerDone, 'utf8') !== 'done') throw new Error('background worker did not finish');
+// Exercise the actual generated background entry, not just a function-name check.
+// Each fixture has its own CLI, counters and completion marker; no real delivery.
+for (const scenario of ['lock-once', 'lock-timeout', 'preflight', 'malformed', 'fatal', 'manual-lock']) {
+  const cli = path.join(root, scenario + '-cli.mjs');
+  const entry = path.join(root, scenario + '-wrapper.mjs');
+  const countFile = path.join(root, scenario + '-count');
+  const doneFile = path.join(root, scenario + '-done');
+  await writeFile(cli, `import { readFile, writeFile } from 'node:fs/promises';
+const scenario = ${JSON.stringify(scenario)};
+const command = process.argv[2];
+if (command === 'run-queue') {
+  const count = Number(await readFile(${JSON.stringify(countFile)}, 'utf8').catch(() => '0')) + 1;
+  await writeFile(${JSON.stringify(countFile)}, String(count));
+  if (scenario === 'fatal') process.exit(1);
+  if (scenario === 'malformed') { console.log('not JSON'); process.exit(2); }
+  if (scenario === 'preflight') { console.log(JSON.stringify({ processed: true, status: 'blocked_preflight' })); process.exit(2); }
+  if (scenario !== 'lock-once' || count === 1) {
+    console.log(JSON.stringify({ processed: false, status: 'locked' })); process.exit(2);
+  }
+  console.log(JSON.stringify({ processed: true, status: 'completed' }));
+}
+if (command === 'queue-terminal-notify') await writeFile(${JSON.stringify(doneFile)}, 'done');
+`);
+  const source = wrapper
+    .replace(/spawn\(process\.execPath, \["[^"]+"/, 'spawn(process.execPath, [' + JSON.stringify(cli))
+    .replace('waitMs = 300000', 'waitMs = 600');
+  await writeFile(entry, source);
+  const startedAt = Date.now();
+  const result = await new Promise((resolve, reject) => {
+    const args = scenario === 'manual-lock' ? ['run-once'] : ['route', '--message', 'Use loop: lock regression', '--source-channel', 'feishu', '--source-target', 'test', '--source-account', 'default', '--source-message-id', scenario];
+    const child = spawn(process.execPath, [entry, ...args], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', chunk => stdout += chunk);
+    child.stderr.on('data', chunk => stderr += chunk);
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout, stderr }));
+  });
+  while (Date.now() - startedAt < 8000 && !(await readFile(doneFile, 'utf8').catch(() => ''))) await new Promise(resolve => setTimeout(resolve, 50));
+  if (await readFile(doneFile, 'utf8').catch(() => '') !== 'done') throw new Error(scenario + ': worker did not reach notifications');
+  const count = Number(await readFile(countFile, 'utf8'));
+  if (scenario === 'manual-lock') {
+    if (result.code !== 2 || count !== 1) throw new Error('manual run-once changed semantics');
+    continue;
+  }
+  if (result.code !== 0) throw new Error(scenario + ': route failed: ' + result.stderr);
+  const receipt = JSON.parse(result.stdout.trim());
+  if (receipt.status !== 'worker_started' || receipt.accepted !== false) throw new Error(scenario + ': invalid receipt');
+  const log = await readFile(path.join(root, receipt.log), 'utf8');
+  if (scenario === 'lock-once' && (count !== 2 || !log.includes('worker_waiting_for_lock') || !log.includes('completed'))) throw new Error('background worker did not recover after lock release');
+  if (scenario === 'lock-timeout' && (count < 2 || count > 10 || !log.includes('worker_lock_wait_timeout'))) throw new Error('lock wait was not bounded/observable');
+  if (['preflight', 'malformed', 'fatal'].includes(scenario) && (count !== 1 || log.includes('worker_waiting_for_lock'))) throw new Error(scenario + ': non-lock failure was retried');
+}
 if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('queue') || !wrapper.includes('continue') || /只入队|只排队|继续当前/.test(wrapper) || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, localization, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
 if (!wrapper.includes('process.exitCode = tickCode;') || wrapper.includes('process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;')) throw new Error('scheduler health still depends on notification delivery');
 const missingSourceRoute = await new Promise((resolve) => {
