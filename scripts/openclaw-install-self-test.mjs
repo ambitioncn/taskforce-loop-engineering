@@ -3,6 +3,8 @@ import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import assert from 'node:assert/strict';
+import { enqueueTask, runQueueOnce } from '../lib/core.mjs';
 
 const root = await mkdtemp(path.join(tmpdir(), 'loop openclaw 安装-'));
 const deliveryCapture = path.join(root, 'delivery.json');
@@ -25,6 +27,11 @@ else {
   if (args[0] === 'agent' && process.env.LOOP_CHECKPOINTS_DIR) {
     const dir = path.resolve(process.cwd(), process.env.LOOP_CHECKPOINTS_DIR);
     await mkdir(dir, { recursive: true });
+    if (process.env.LOOP_REVIEW_TEST) {
+      for (const [id, sequence, blockers] of [['cp99', 1, []], ['progress-latest', 2, ['Unknown external outcome']]]) await writeFile(path.join(dir, id + '.json'), JSON.stringify({ task_id: process.env.LOOP_TASK_ID, checkpoint_id: id, sequence, status: blockers.length ? 'needs_human_input' : 'ready_for_acceptance', project_completion: process.env.LOOP_REVIEW_TEST.startsWith('terminal-') ? { status: sequence === 1 ? 'complete' : 'needs_human_acceptance' } : undefined, summary: 'Mock progress', blockers, risks: [], verification: [{ command: 'mock check', outcome: 'passed' }] }));
+      console.error(process.env.LOOP_REVIEW_TEST.endsWith('overflow') ? 'context_length_exceeded' : 'generic worker failure');
+      process.exit(1);
+    }
     await writeFile(path.join(dir, 'cp1.json'), JSON.stringify({ version: 1, task_id: process.env.LOOP_TASK_ID, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Read-only smoke completed.', files_changed: [], verification: [{ command: 'mock smoke', outcome: 'passed' }], blockers: [], risks: [], next_action: 'acceptance_review' }));
   }
   if (process.env.DELIVERY_CAPTURE) await writeFile(process.env.DELIVERY_CAPTURE, JSON.stringify(args));
@@ -69,10 +76,113 @@ if (queue.language !== 'en') throw new Error('resolved installation language was
 if (queue.scheduler?.required !== true || queue.scheduler?.heartbeatMaxAgeMs !== 300000) throw new Error('required scheduler heartbeat was not installed');
 const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
 if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE') || !dispatcher.includes('LOOP_SESSION_GENERATION') || !dispatcher.includes('-g${sessionGeneration}')) throw new Error('worker, recursion guard, amendment polling, or session generation missing');
-if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 10) throw new Error('bounded runtime recovery policy was not installed');
+if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 3) throw new Error('bounded runtime recovery policy was not installed');
+// Exercise the generated dispatcher, including large-task prompt bounds and
+// concrete file references (the Gateway worker does not inherit CLI env vars).
+const largeTaskFile = path.join(root, 'large-task.json');
+const largeCapture = path.join(root, 'large-task-args.json');
+await writeFile(largeTaskFile, JSON.stringify({ id: 'large-task', body: 'x'.repeat(100000) }));
+const largeDispatch = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs')], { cwd: root, env: { ...process.env, LOOP_TASK_FILE: largeTaskFile, LOOP_TASK_ID: 'large-task', LOOP_SESSION_GENERATION: '3', DELIVERY_CAPTURE: largeCapture }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', x => stderr += x);
+  child.on('error', reject);
+  child.on('close', code => resolve({ code, stderr }));
+});
+if (largeDispatch.code !== 0) throw new Error('generated context dispatcher failed: ' + largeDispatch.stderr);
+const largeArgs = JSON.parse(await readFile(largeCapture, 'utf8'));
+const largePrompt = largeArgs[largeArgs.indexOf('--message') + 1];
+if (Buffer.byteLength(largePrompt) > 16384 || !largePrompt.includes(largeTaskFile) || !largePrompt.includes('CONTEXT BUDGET') || !largeArgs.includes('agent:builder:loop-task-large-task-g3')) throw new Error('generated dispatcher lost bounded prompt, file reference, context instructions or session generation');
+// The generated dispatcher/observer must preserve checkpoint gating through
+// actual queue retries and overflow recovery, not just prompt source checks.
+for (const failure of ['ordinary', 'overflow', 'terminal-ordinary', 'terminal-overflow']) {
+  await enqueueTask(root, { queue: 'review-order', title: failure, task: 'Inspect mocked local data' });
+  const options = { queue: 'review-order', dispatcher: `LOOP_REVIEW_TEST=${failure} node scripts/loops/openclaw-loop-dispatch.mjs`, retry: { ...queue.retry, maxAttempts: 3 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+  const result = await runQueueOnce(root, options);
+  assert.equal(result.status, 'needs_human_input');
+  assert.equal(result.run.dispatchAttempts.length, 1);
+  assert.equal(result.run.revisionRequest, null);
+  assert.equal((await runQueueOnce(root, options)).processed, false);
+}
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('Use Loop Engineering to fix this issue') || !instructions.includes('Queue this only; do not run it yet') || /走 loop|只入队|只排队/.test(instructions)) throw new Error('English conversation instructions are missing or contain Chinese routing examples');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
+// A slow worker must outlive its routing caller, retaining observable output.
+const fakeLoop = path.join(root, 'slow-loop.mjs');
+const asyncWrapper = path.join(root, 'async-wrapper.mjs');
+const workerDone = path.join(root, 'worker-done');
+await writeFile(fakeLoop, `import { writeFile } from 'node:fs/promises';
+if (process.argv[2] === 'run-queue') {
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  await writeFile(${JSON.stringify(workerDone)}, 'done');
+}
+`);
+await writeFile(asyncWrapper, wrapper.replace(/spawn\(process\.execPath, \["[^"]+"/, 'spawn(process.execPath, [' + JSON.stringify(fakeLoop)));
+const launchStart = Date.now();
+const launched = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [asyncWrapper, 'route', '--message', 'Use loop: slow task', '--source-channel', 'feishu', '--source-target', 'test', '--source-account', 'default', '--source-message-id', 'test-launch'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', x => stdout += x); child.stderr.on('data', x => stderr += x);
+  child.on('error', reject); child.on('close', code => resolve({ code, stdout, stderr }));
+});
+if (launched.code !== 0 || Date.now() - launchStart >= 3000 || !launched.stdout.includes('worker_started')) throw new Error('routing waited for slow worker: ' + launched.stderr);
+const receipt = JSON.parse(launched.stdout.trim());
+if (receipt.accepted !== false || !receipt.pid || !receipt.log) throw new Error('launch receipt misrepresents acceptance');
+while (Date.now() - launchStart < 8000 && !(await readFile(workerDone, 'utf8').catch(() => ''))) await new Promise(resolve => setTimeout(resolve, 100));
+if (await readFile(workerDone, 'utf8') !== 'done') throw new Error('background worker did not finish');
+// Exercise the actual generated background entry, not just a function-name check.
+// Each fixture has its own CLI, counters and completion marker; no real delivery.
+for (const scenario of ['lock-once', 'lock-timeout', 'preflight', 'malformed', 'fatal', 'manual-lock']) {
+  const cli = path.join(root, scenario + '-cli.mjs');
+  const entry = path.join(root, scenario + '-wrapper.mjs');
+  const countFile = path.join(root, scenario + '-count');
+  const doneFile = path.join(root, scenario + '-done');
+  await writeFile(cli, `import { readFile, writeFile } from 'node:fs/promises';
+const scenario = ${JSON.stringify(scenario)};
+const command = process.argv[2];
+if (command === 'run-queue') {
+  const count = Number(await readFile(${JSON.stringify(countFile)}, 'utf8').catch(() => '0')) + 1;
+  await writeFile(${JSON.stringify(countFile)}, String(count));
+  if (scenario === 'fatal') process.exit(1);
+  if (scenario === 'malformed') { console.log('not JSON'); process.exit(2); }
+  if (scenario === 'preflight') { console.log(JSON.stringify({ processed: true, status: 'blocked_preflight' })); process.exit(2); }
+  if (scenario !== 'lock-once' || count === 1) {
+    console.log(JSON.stringify({ processed: false, status: 'locked' })); process.exit(2);
+  }
+  console.log(JSON.stringify({ processed: true, status: 'completed' }));
+}
+if (command === 'queue-terminal-notify') await writeFile(${JSON.stringify(doneFile)}, 'done');
+`);
+  const source = wrapper
+    .replace(/spawn\(process\.execPath, \["[^"]+"/, 'spawn(process.execPath, [' + JSON.stringify(cli))
+    .replace('waitMs = 300000', 'waitMs = 600');
+  await writeFile(entry, source);
+  const startedAt = Date.now();
+  const result = await new Promise((resolve, reject) => {
+    const args = scenario === 'manual-lock' ? ['run-once'] : ['route', '--message', 'Use loop: lock regression', '--source-channel', 'feishu', '--source-target', 'test', '--source-account', 'default', '--source-message-id', scenario];
+    const child = spawn(process.execPath, [entry, ...args], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', chunk => stdout += chunk);
+    child.stderr.on('data', chunk => stderr += chunk);
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout, stderr }));
+  });
+  while (Date.now() - startedAt < 8000 && !(await readFile(doneFile, 'utf8').catch(() => ''))) await new Promise(resolve => setTimeout(resolve, 50));
+  if (await readFile(doneFile, 'utf8').catch(() => '') !== 'done') throw new Error(scenario + ': worker did not reach notifications');
+  const count = Number(await readFile(countFile, 'utf8'));
+  if (scenario === 'manual-lock') {
+    if (result.code !== 2 || count !== 1) throw new Error('manual run-once changed semantics');
+    continue;
+  }
+  if (result.code !== 0) throw new Error(scenario + ': route failed: ' + result.stderr);
+  const receipt = JSON.parse(result.stdout.trim());
+  if (receipt.status !== 'worker_started' || receipt.accepted !== false) throw new Error(scenario + ': invalid receipt');
+  const log = await readFile(path.join(root, receipt.log), 'utf8');
+  if (scenario === 'lock-once' && (count !== 2 || !log.includes('worker_waiting_for_lock') || !log.includes('completed'))) throw new Error('background worker did not recover after lock release');
+  if (scenario === 'lock-timeout' && (count < 2 || count > 10 || !log.includes('worker_lock_wait_timeout'))) throw new Error('lock wait was not bounded/observable');
+  if (['preflight', 'malformed', 'fatal'].includes(scenario) && (count !== 1 || log.includes('worker_waiting_for_lock'))) throw new Error(scenario + ': non-lock failure was retried');
+}
 if (!wrapper.includes('--supersede-active') || !wrapper.includes('--amend-active') || !wrapper.includes('--progress-notify-command') || !wrapper.includes('runWhenUnlocked') || wrapper.includes("run-queue-drain', '--config'") || wrapper.includes("spawn('loop-engineering'") || !wrapper.includes('queue-human-input-notify') || !wrapper.includes('queue-terminal-notify') || !wrapper.includes('queue-scheduler-tick') || !wrapper.includes('queue') || !wrapper.includes('continue') || /只入队|只排队|继续当前/.test(wrapper) || !wrapper.includes('requiredSource') || !wrapper.includes('--source-message-id')) throw new Error('supersede/amend routing, source fail-closed policy, localization, absolute CLI, scheduler, live progress, async notification, or queue-only routing missing');
 if (!wrapper.includes('process.exitCode = tickCode;') || wrapper.includes('process.exitCode = tickCode || humanNotifyCode || terminalNotifyCode;')) throw new Error('scheduler health still depends on notification delivery');
 const missingSourceRoute = await new Promise((resolve) => {

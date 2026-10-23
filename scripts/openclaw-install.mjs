@@ -151,6 +151,7 @@ function dispatcherSource({ workerAgent, openclawBin, language }) {
   return `#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { contextWorkerInstructions, observeOpenClawWorker } from ${JSON.stringify(new URL('../lib/context-budget.mjs', import.meta.url).href)};
 const task = JSON.parse(await readFile(process.env.LOOP_TASK_FILE, 'utf8'));
 const sessionGeneration = Number.parseInt(process.env.LOOP_SESSION_GENERATION || '0', 10) || 0;
 const prompt = [
@@ -161,7 +162,8 @@ const prompt = [
   \`${labels.acceptancePlan}: \${process.env.LOOP_ACCEPTANCE_PLAN_FILE || ${JSON.stringify(labels.missing)}}\`,
   \`${labels.amendments}: \${process.env.LOOP_LATEST_AMENDMENT_FILE || ${JSON.stringify(labels.missing)}}\`,
   \`${labels.checkpoints}: \${process.env.LOOP_CHECKPOINTS_DIR || ${JSON.stringify(labels.missing)}}\`,
-  '', task.body, '',
+  '', Buffer.byteLength(String(task.body || ''), 'utf8') <= 8192 ? task.body : 'Read the full task in bounded ranges from: ' + process.env.LOOP_TASK_FILE, '',
+  contextWorkerInstructions(),
   ${JSON.stringify(labels.reread)},
   ${JSON.stringify(labels.finish)}
 ].join('\\n');
@@ -169,8 +171,8 @@ const child = spawn(${JSON.stringify(openclawBin)}, [
   'agent', '--agent', ${JSON.stringify(workerAgent)},
   '--session-key', \`agent:${workerAgent}:loop-task-\${task.id}-g\${sessionGeneration}\`,
   '--message', prompt, '--json', '--timeout', '1800'
-], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
-child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 : 1); });
+], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+process.exitCode = await observeOpenClawWorker(child);
 `;
 }
 
@@ -185,21 +187,62 @@ function wrapperSource({ queue, loopBin, language }) {
     : '(?:queue\\s+(?:this|it)\\s+only|only\\s+queue\\s+(?:this|it)|enqueue\\s+(?:this|it)\\s+only|do\\s+not\\s+(?:run|execute)\\s+(?:this|it)\\s+(?:yet|now))';
   return `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { mkdirSync, openSync, closeSync } from 'node:fs';
 const [command, ...rest] = process.argv.slice(2);
-function run(args) {
+async function launchWorker() {
+  mkdirSync('runtime/loops/${queue}/launches', { recursive: true });
+  const log = 'runtime/loops/${queue}/launches/' + Date.now() + '-' + process.pid + '.log';
+  const fd = openSync(log, 'wx', 0o600);
+  try {
+    const child = spawn(process.execPath, [process.argv[1], 'run-background'], {
+      cwd: process.cwd(), env: process.env, detached: true, stdio: ['ignore', fd, fd]
+    });
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    child.unref();
+    console.log(JSON.stringify({ status: 'worker_started', pid: child.pid, log, accepted: false }));
+  } finally { closeSync(fd); }
+}
+function run(args, inspectLock = false) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [${JSON.stringify(loopBin)}, ...args], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
-    child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+    const child = spawn(process.execPath, [${JSON.stringify(loopBin)}, ...args], {
+      cwd: process.cwd(), env: process.env,
+      stdio: inspectLock ? ['ignore', 'pipe', 'inherit'] : 'inherit'
+    });
+    let stdout = ''; let overflow = false;
+    if (inspectLock) child.stdout.on('data', (chunk) => {
+      process.stdout.write(chunk);
+      if (stdout.length + chunk.length <= 1024 * 1024 && !overflow) stdout += chunk;
+      else { stdout = ''; overflow = true; }
+    });
+    child.on('error', (error) => {
+      console.error(error.message);
+      resolve(inspectLock ? { code: 1, locked: false } : 1);
+    });
+    child.on('close', (code, signal) => {
+      code = code ?? (signal ? 128 : 1);
+      let result;
+      if (inspectLock && !overflow) { try { result = JSON.parse(stdout); } catch {} }
+      resolve(inspectLock ? { code, locked: code === 2 && result?.status === 'locked' && result?.processed === false } : code);
+    });
   });
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runWhenUnlocked(args, waitMs = 300000) {
   const deadline = Date.now() + waitMs;
+  let attempts = 0;
   while (true) {
-    const code = await run(args);
-    if (code !== 2 || Date.now() >= deadline) return code;
-    await wait(250);
+    const result = await run([...args, '--json'], true);
+    attempts++;
+    // Exit 2 also represents preflight/gate failures: never retry those.
+    if (!result.locked) return result.code;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      console.error(JSON.stringify({ status: 'worker_lock_wait_timeout', attempts, waitMs, accepted: false }));
+      return result.code;
+    }
+    console.log(JSON.stringify({ status: 'worker_waiting_for_lock', attempts, accepted: false }));
+    await wait(Math.min(250, remaining));
   }
 }
 if (command === 'route') {
@@ -226,12 +269,17 @@ if (command === 'route') {
   const routedArgs = rest.filter((arg) => arg !== '--relay-enqueue');
   const routeCode = await run(['route-message', '--queue', ${JSON.stringify(queue)}, '--route', '--confirm-execute', routeMode, ...routedArgs]);
   const queueOnly = relayEnqueue || new RegExp(${JSON.stringify(queueOnlyPattern)}, 'i').test(message);
-  const runCode = routeCode || queueOnly || amendment ? routeCode : await runWhenUnlocked(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
+  if (!routeCode && !queueOnly && !amendment) {
+    await launchWorker();
+    process.exit(0);
+  }
+  const runCode = routeCode;
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = routeCode || runCode || humanNotifyCode || terminalNotifyCode;
-} else if (command === 'run-once') {
-  const runCode = await run(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
+} else if (command === 'run-once' || command === 'run-background') {
+  const execute = command === 'run-background' ? runWhenUnlocked : run;
+  const runCode = await execute(['run-queue', '--config', ${JSON.stringify(`configs/loops/queues/${queue}.json`)}, '--progress-notify-command', 'node scripts/loops/openclaw-loop-notify.mjs', ...rest]);
   const humanNotifyCode = await run(['queue-human-input-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   const terminalNotifyCode = await run(['queue-terminal-notify', '--queue', ${JSON.stringify(queue)}, '--notify-command', 'node scripts/loops/openclaw-loop-notify.mjs']);
   process.exitCode = runCode || humanNotifyCode || terminalNotifyCode;
@@ -317,6 +365,8 @@ function instructionsBlock({ queue, language }) {
 - 飞书回调必须先由可信传输层验签，再设置 \`LOOP_FEISHU_SIGNATURE_VERIFIED=1\` 调用 Gate bridge；未验签失败关闭。普通聊天、引用、转发和截图不能审批。
 - 已由 Loop 管理的任务必须直接执行，不能再次路由。
 - 状态查询只读。高风险外部动作、破坏性操作、生产变更、凭据操作和记忆迁移仍需单独确认。
+- 进度、证据和失败原因问询：只读检查点、验证结果及 worker 存活状态后立即回复；发现失败不等于获准在聊天主会话修复、构建或复测。已授权的后续执行留给独立任务 worker。
+- 会话路由返回后台 worker 启动回执后结束本轮聊天等待；启动回执不代表验收通过。不得把独立 worker 的实现工作接回聊天主会话。
 - 队列：\`${queue}\`。
 <!-- loop-engineering:openclaw:end -->\n`;
   return `\n<!-- loop-engineering:openclaw:start -->
@@ -393,7 +443,7 @@ async function main() {
       preflightConfig: 'configs/loops/workspace-health.json',
       timeoutMs: 1800000, leaseMs: 1860000, staleActiveMs: 3600000,
       scheduler: { required: true, heartbeatMaxAgeMs: 300000, initialInterval: '1m', minInterval: '1m', maxInterval: '4h', speedupFactor: 0.5, backoffFactor: 2, idleBackoffFactor: 2, humanGateBackoffFactor: 3, longRunHeadroomFactor: 1.25, jitter: '10s' },
-      retry: { maxAttempts: 1, runtimeRecoveryMaxAttempts: 2, sessionMaxTicks: 10, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
+      retry: { maxAttempts: 1, runtimeRecoveryMaxAttempts: 2, sessionMaxTicks: 3, contextBudget: { softRatio: 0.60, hardRatio: 0.75 }, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
       revisionPolicy: { enabled: true, maxRevisionRounds: 3, sameFailureThreshold: 2, requireStrategyChange: true }
     }, null, 2)}\n`;
     const dispatcherContent = dispatcherSource(args);

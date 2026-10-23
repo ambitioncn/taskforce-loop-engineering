@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.16.1 - 2026-10-23
+
+- Restrict terminal-lock governance exemptions to accepted, gate-free later reviews. A `needs_human_acceptance` project label no longer hides current blockers or failed acceptance; protect ordinary retries and context recovery with terminal-checkpoint regressions through both core and installed mock dispatchers.
+
+- Select effective checkpoint reviews using explicit numeric sequence and checkpoint timestamps, never ID suffixes or review-generation order. Preserve unresolved blockers under missing/conflicting chronology in both task and milestone paths; count milestone coverage once and keep terminal acceptance from hiding unordered/current-task blockers.
+
+- Check effective blocked checkpoints before each ordinary dispatch retry, even without a handoff. Preserve human-blocked classification for ordinary/verification failures without creating development revisions; resolved historical blockers still allow retries.
+
+- Stop runtime recovery and requeueing when an effective checkpoint review is blocked, including interruption before handoff creation; retain recovery after historical blockers are resolved.
+
+- Fix nonzero-exit handoff adjudication before retries and preserve human/runtime diagnostic signatures before worker output clipping; add combined failure, custom-policy and split UTF-8 regression coverage.
+
+- Add OpenClaw context-budget protection: default three-tick session rotation, final-prompt telemetry-based rotation at 60%/75%, bounded worker output capture, and durable run-bound handoffs. Missing telemetry falls back to the tick limit; in-turn thresholds and tool-output budgets are cooperative, not runtime interrupts.
+- Classify explicit context overflow as bounded session recovery and never retry a known runtime interruption in the same session. Validate handoff checkpoints and stop for unresolved authority/action outcomes; completed work is not replayed for high usage.
+- Update the skill's background lock-wait and context-budget procedures. Existing integrations require a reviewed upgrade to activate generated dispatcher/config changes.
+
 ## 0.16.0 - 2026-10-10
 
 ### Upgrade notes

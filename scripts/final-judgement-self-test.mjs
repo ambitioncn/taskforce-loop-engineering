@@ -239,11 +239,11 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
   const reviews = {
     reviews: [
-      { checkpointId: 'cp5', milestoneId: 'G-01-retry', sequence: 5, createdAt: '2026-08-07T04:00:00.000Z', status: 'accepted' },
-      { checkpointId: 'cp14', milestoneId: 'G-01-auth', sequence: 3, createdAt: '2026-08-07T12:00:00.000Z', status: 'blocked' }
+      { checkpointId: 'cp5', milestoneId: 'G-01-retry', sequence: 5, checkpointCreatedAt: '2026-08-07T04:00:00.000Z', status: 'accepted' },
+      { checkpointId: 'cp14', milestoneId: 'G-01-auth', sequence: 3, checkpointCreatedAt: '2026-08-07T12:00:00.000Z', status: 'blocked' }
     ]
   };
-  assert.equal(selectEffectiveAcceptanceReviews(devPlan, reviews)[0].checkpointId, 'cp14');
+  assert.equal(selectEffectiveAcceptanceReviews(devPlan, reviews).some(review => review.checkpointId === 'cp14'), true, 'conflicting clocks retain the blocker');
 }
 
 {
@@ -344,7 +344,7 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
       projectCompletion: { status: 'complete' }, checkpointRisks: []
     },
     {
-      checkpointId: 'cp21', sequence: 21, status: 'blocked',
+      checkpointId: 'cp21', sequence: 21, status: 'accepted',
       projectCompletion: { status: 'needs_human_acceptance' },
       checkpointNextAction: 'owner accepts broader OpenReel v4 project'
     }
@@ -359,4 +359,92 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
   assert.equal(judgement.requires_human_gate, false);
 }
 
+
+// Recovery uses effective blockers, never a resolved historical checkpoint.
+for (const dispatchStatus of ['runtime_interrupted', 'runtime_blocked', 'failed', 'verify_failed']) {
+  const unblockedOutcome = ['failed', 'verify_failed'].includes(dispatchStatus) ? 'needs_revision' : dispatchStatus;
+  const judge = reviews => buildFinalJudgement(baseContract, basePlan, { checkpoints: [{ id: 'cp1' }] }, { count: reviews.length }, { reviews }, { dispatchStatus });
+  assert.equal(judge([{ checkpointId: 'cp1', status: 'blocked' }]).outcome, 'blocked');
+  assert.equal(judge([{ checkpointId: 'cp1', sequence: 1, status: 'blocked' }, { checkpointId: 'cp2', sequence: 2, status: 'accepted' }]).outcome, unblockedOutcome);
+  assert.equal(judge([]).outcome, unblockedOutcome);
+}
+
 console.log('final judgement self-test passed');
+
+// IDs carry no ordering authority; exercise both input orders and all scopes.
+for (const checkpoints of [[{ id: 'm' }], [{ id: 'm' }, { id: 'other' }]]) {
+  const select = reviews => selectEffectiveAcceptanceReviews({ checkpoints }, { reviews });
+  for (const [oldId, newId] of [['cp1', 'progress-latest'], ['cp99', 'cp1'], ['alpha', 'omega']]) {
+    for (const clocks of [
+      [{ sequence: 1 }, { sequence: 2 }],
+      [{ checkpointCreatedAt: '2026-10-23T00:00:00Z' }, { checkpointCreatedAt: '2026-10-23T00:01:00Z' }]
+    ]) {
+      for (const resolved of [false, true]) {
+        const pair = [
+          { checkpointId: oldId, milestoneId: 'm', ...clocks[0], status: resolved ? 'blocked' : 'accepted' },
+          { checkpointId: newId, milestoneId: 'm', ...clocks[1], status: resolved ? 'accepted' : 'blocked' }
+        ];
+        for (const input of [pair, [...pair].reverse()]) assert.deepEqual(select(input).map(r => r.checkpointId), [newId]);
+      }
+    }
+  }
+  for (const clocks of [
+    [{}, {}], [{ checkpointCreatedAt: '2026-10-23T00:00:00Z' }, { checkpointCreatedAt: '' }], [{ sequence: 1 }, {}], [{ sequence: 1 }, { sequence: 1 }],
+    [{ sequence: '2', checkpointCreatedAt: 'invalid' }, { sequence: null }],
+    [{ sequence: 2, checkpointCreatedAt: '2026-10-23T00:00:00Z' }, { sequence: 1, checkpointCreatedAt: '2026-10-23T00:01:00Z' }]
+  ]) {
+    const pair = [
+      { checkpointId: 'unknown', milestoneId: 'm', ...clocks[0], status: 'blocked' },
+      { checkpointId: 'cp999', milestoneId: 'm', ...clocks[1], status: 'accepted' }
+    ];
+    for (const input of [pair, [...pair].reverse()]) assert.equal(select(input).some(r => r.status === 'blocked'), true);
+  }
+}
+{
+  const terminal = { checkpointId: 'done', status: 'accepted', taskTerminal: true };
+  const blocker = { checkpointId: 'pending', status: 'blocked' };
+  assert.equal(selectEffectiveAcceptanceReviews({}, { reviews: [terminal, blocker] }).some(r => r.status === 'blocked'), true);
+  const judgement = buildFinalJudgement(baseContract, basePlan, { checkpoints: [{ id: 'm' }, { id: 'missing' }] }, { count: 2 }, { reviews: [
+    { checkpointId: 'a', milestoneId: 'm', status: 'accepted' },
+    { checkpointId: 'b', milestoneId: 'm', status: 'accepted' }
+  ] }, { dispatchStatus: 'completed' });
+  assert.equal(judgement.outcome, 'needs_revision', 'ambiguous snapshots cannot count as multiple milestones');
+}
+
+{
+  // A disconnected latest snapshot must not hide a contradictory clock cycle.
+  const reviews = [
+    { checkpointId: 'a', sequence: 1, status: 'blocked' },
+    { checkpointId: 'b', sequence: 2, checkpointCreatedAt: '2026-10-23T00:00:00Z', status: 'accepted' },
+    { checkpointId: 'c', checkpointCreatedAt: '2026-10-23T00:01:00Z', status: 'accepted' },
+    { checkpointId: 'd', sequence: 0, checkpointCreatedAt: '2026-10-23T00:02:00Z', status: 'accepted' },
+    { checkpointId: 'isolated', status: 'accepted' }
+  ];
+  assert.equal(selectEffectiveAcceptanceReviews({}, { reviews }).some(r => r.status === 'blocked'), true);
+  assert.equal(selectEffectiveAcceptanceReviews({}, { reviews: [
+    { checkpointId: 'done', sequence: 1, status: 'accepted', taskTerminal: true },
+    { checkpointId: 'pending', sequence: 2, status: 'blocked' }
+  ] }).some(r => r.status === 'blocked'), true, 'terminal cannot swallow a later task blocker');
+}
+
+// A broader-project label must never launder a failed/blocked task review.
+for (const status of ['blocked', 'revise']) {
+  for (const dispatchStatus of ['completed', 'failed', 'verify_failed', 'runtime_interrupted', 'runtime_blocked']) {
+    const terminal = { checkpointId: 'done', sequence: 1, status: 'accepted', projectCompletion: { status: 'complete' } };
+    const later = { checkpointId: 'progress', sequence: 2, status, projectCompletion: { status: 'needs_human_acceptance' } };
+    for (const reviews of [[terminal, later], [later, terminal]]) {
+      const judgement = buildFinalJudgement(baseContract, basePlan, { checkpoints: [{ id: 'cp1' }] }, { count: 2 }, { reviews }, { dispatchStatus });
+      assert.deepEqual(judgement.coverage.effective_review_ids, ['progress']);
+      assert.equal(judgement.coverage.terminal_lock, false);
+      if (status === 'blocked') assert.equal(judgement.outcome, 'blocked');
+    }
+  }
+}
+// Even accepted governance cannot hide a materializable deferred gate.
+{
+  const reviews = [
+    { checkpointId: 'done', sequence: 1, status: 'accepted', projectCompletion: 'complete' },
+    { checkpointId: 'gate', sequence: 2, status: 'accepted', projectCompletion: 'needs_human_acceptance', deferredGates: [{ action: 'send' }] }
+  ];
+  assert.deepEqual(selectEffectiveAcceptanceReviews({ checkpoints: [{ id: 'cp1' }] }, { reviews }).map(r => r.checkpointId), ['gate']);
+}
