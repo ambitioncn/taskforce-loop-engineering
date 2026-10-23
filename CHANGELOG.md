@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add OpenClaw context-budget protection: default three-tick session rotation, final-prompt telemetry-based rotation at 60%/75%, bounded worker output capture, and durable run-bound handoffs. Missing telemetry falls back to the tick limit; in-turn thresholds and tool-output budgets are cooperative, not runtime interrupts.
+- Classify explicit context overflow as bounded session recovery and never retry a known runtime interruption in the same session. Validate handoff checkpoints and stop for unresolved authority/action outcomes; completed work is not replayed for high usage.
+- Update the skill's background lock-wait and context-budget procedures. Existing integrations require a reviewed upgrade to activate generated dispatcher/config changes.
+
 ## 0.16.0 - 2026-10-10
 
 ### Upgrade notes

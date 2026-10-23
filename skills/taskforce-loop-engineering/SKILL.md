@@ -139,7 +139,7 @@ Interpret explicit loop language as follows:
 - A new explicit `走 loop` request while another task is active is a correction/replacement, not ordinary backlog. Supersede the active task at a safe boundary, retain its evidence and lineage, then start the replacement after the lock is released.
 - Status, progress, evidence, or failure questions are read-only and must not start another tick unless the user explicitly asks to continue/run.
 - For status questions, read the latest checkpoint, verification result and worker liveness, then reply before doing further work. A failed check is a result to report, not authorization to edit files, rebuild images or rerun tests in the chat session. Send authorized follow-up execution to the task's independent worker session; never adopt its implementation into the conversation session.
-- Conversation routing starts a background worker and returns a launch receipt; it must not await the full worker tick. A receipt proves launch only, not task acceptance. Keep scheduler/manual `run-once` execution synchronous and inspect its final artifacts separately.
+- Conversation routing starts a background worker and returns a launch receipt; it must not await the full worker tick. A receipt proves process launch only, not lock acquisition, task execution, or acceptance. The background entry waits for a confirmed queue-lock conflict for up to five minutes by default; only exit code 2 with JSON status=locked and processed=false is retried. Read the launch log and queue state after timeout; do not start a duplicate worker from the chat. Keep scheduler/manual `run-once` execution synchronous and inspect its final artifacts separately.
 
 Do not infer a queue or dispatcher from this skill. Use the integration installed in the current workspace. For OpenClaw, inspect the generated queue configuration under `configs/loops/queues/` and use the managed wrapper when present. A default installation uses queue `agent-tasks` and the generic wrapper below; an operator may choose another queue or worker during installation.
 
@@ -153,6 +153,10 @@ loop-engineering queue-peek --queue <installed-queue> --root . --json
 If the managed wrapper or queue configuration is absent, stop and run the platform installer/doctor workflow above. Product names, personal agent names, and host-specific dispatchers belong in local workspace instructions, never in this distributed skill.
 
 Pass the original request faithfully. Preserve source channel, target, account, message id, and reply-to metadata so progress, human gates, and terminal results return to the originating conversation. Missing delivery routing must fail closed.
+
+## Context Budget and Durable Handoff
+
+For OpenClaw workers, follow `references/context-budget.md` before long-running work or recovery. Keep one bounded objective per turn, read bounded file ranges, and save checkpoints instead of replaying transcripts. Resolve paths against the resume manifest's workspace root; preserve authority, amendments, and action receipts across session rotation. A handoff is incomplete work, not acceptance. Verify the installed dispatcher and queue policy before claiming these protections are active.
 
 ## Task vs Project Classification
 

@@ -151,6 +151,7 @@ function dispatcherSource({ workerAgent, openclawBin, language }) {
   return `#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { contextWorkerInstructions, observeOpenClawWorker } from ${JSON.stringify(new URL('../lib/context-budget.mjs', import.meta.url).href)};
 const task = JSON.parse(await readFile(process.env.LOOP_TASK_FILE, 'utf8'));
 const sessionGeneration = Number.parseInt(process.env.LOOP_SESSION_GENERATION || '0', 10) || 0;
 const prompt = [
@@ -161,7 +162,8 @@ const prompt = [
   \`${labels.acceptancePlan}: \${process.env.LOOP_ACCEPTANCE_PLAN_FILE || ${JSON.stringify(labels.missing)}}\`,
   \`${labels.amendments}: \${process.env.LOOP_LATEST_AMENDMENT_FILE || ${JSON.stringify(labels.missing)}}\`,
   \`${labels.checkpoints}: \${process.env.LOOP_CHECKPOINTS_DIR || ${JSON.stringify(labels.missing)}}\`,
-  '', task.body, '',
+  '', Buffer.byteLength(String(task.body || ''), 'utf8') <= 8192 ? task.body : 'Read the full task in bounded ranges from: ' + process.env.LOOP_TASK_FILE, '',
+  contextWorkerInstructions(),
   ${JSON.stringify(labels.reread)},
   ${JSON.stringify(labels.finish)}
 ].join('\\n');
@@ -169,8 +171,8 @@ const child = spawn(${JSON.stringify(openclawBin)}, [
   'agent', '--agent', ${JSON.stringify(workerAgent)},
   '--session-key', \`agent:${workerAgent}:loop-task-\${task.id}-g\${sessionGeneration}\`,
   '--message', prompt, '--json', '--timeout', '1800'
-], { cwd: process.cwd(), env: process.env, stdio: 'inherit' });
-child.on('close', (code, signal) => { process.exitCode = code ?? (signal ? 128 : 1); });
+], { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+process.exitCode = await observeOpenClawWorker(child);
 `;
 }
 
@@ -441,7 +443,7 @@ async function main() {
       preflightConfig: 'configs/loops/workspace-health.json',
       timeoutMs: 1800000, leaseMs: 1860000, staleActiveMs: 3600000,
       scheduler: { required: true, heartbeatMaxAgeMs: 300000, initialInterval: '1m', minInterval: '1m', maxInterval: '4h', speedupFactor: 0.5, backoffFactor: 2, idleBackoffFactor: 2, humanGateBackoffFactor: 3, longRunHeadroomFactor: 1.25, jitter: '10s' },
-      retry: { maxAttempts: 1, runtimeRecoveryMaxAttempts: 2, sessionMaxTicks: 10, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
+      retry: { maxAttempts: 1, runtimeRecoveryMaxAttempts: 2, sessionMaxTicks: 3, contextBudget: { softRatio: 0.60, hardRatio: 0.75 }, retryDelayMs: 0, retryExitCodes: [1], requiresHumanActionPatterns: ['requires human', '需要人工', 'Permission denied', 'Operation not permitted'] },
       revisionPolicy: { enabled: true, maxRevisionRounds: 3, sameFailureThreshold: 2, requireStrategyChange: true }
     }, null, 2)}\n`;
     const dispatcherContent = dispatcherSource(args);

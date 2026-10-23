@@ -69,7 +69,24 @@ if (queue.language !== 'en') throw new Error('resolved installation language was
 if (queue.scheduler?.required !== true || queue.scheduler?.heartbeatMaxAgeMs !== 300000) throw new Error('required scheduler heartbeat was not installed');
 const dispatcher = await readFile(path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs'), 'utf8');
 if (!dispatcher.includes('already loop-managed') || !dispatcher.includes("'--agent', \"builder\"") || !dispatcher.includes('LOOP_LATEST_AMENDMENT_FILE') || !dispatcher.includes('LOOP_SESSION_GENERATION') || !dispatcher.includes('-g${sessionGeneration}')) throw new Error('worker, recursion guard, amendment polling, or session generation missing');
-if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 10) throw new Error('bounded runtime recovery policy was not installed');
+if (queue.retry?.runtimeRecoveryMaxAttempts !== 2 || queue.retry?.sessionMaxTicks !== 3) throw new Error('bounded runtime recovery policy was not installed');
+// Exercise the generated dispatcher, including large-task prompt bounds and
+// concrete file references (the Gateway worker does not inherit CLI env vars).
+const largeTaskFile = path.join(root, 'large-task.json');
+const largeCapture = path.join(root, 'large-task-args.json');
+await writeFile(largeTaskFile, JSON.stringify({ id: 'large-task', body: 'x'.repeat(100000) }));
+const largeDispatch = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/loops/openclaw-loop-dispatch.mjs')], { cwd: root, env: { ...process.env, LOOP_TASK_FILE: largeTaskFile, LOOP_TASK_ID: 'large-task', LOOP_SESSION_GENERATION: '3', DELIVERY_CAPTURE: largeCapture }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', x => stderr += x);
+  child.on('error', reject);
+  child.on('close', code => resolve({ code, stderr }));
+});
+if (largeDispatch.code !== 0) throw new Error('generated context dispatcher failed: ' + largeDispatch.stderr);
+const largeArgs = JSON.parse(await readFile(largeCapture, 'utf8'));
+const largePrompt = largeArgs[largeArgs.indexOf('--message') + 1];
+if (Buffer.byteLength(largePrompt) > 16384 || !largePrompt.includes(largeTaskFile) || !largePrompt.includes('CONTEXT BUDGET') || !largeArgs.includes('agent:builder:loop-task-large-task-g3')) throw new Error('generated dispatcher lost bounded prompt, file reference, context instructions or session generation');
 const instructions = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!instructions.includes('Use Loop Engineering to fix this issue') || !instructions.includes('Queue this only; do not run it yet') || /走 loop|只入队|只排队/.test(instructions)) throw new Error('English conversation instructions are missing or contain Chinese routing examples');
 const wrapper = await readFile(path.join(root, 'scripts/loops/openclaw-loop.mjs'), 'utf8');
