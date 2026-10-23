@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop runtime recovery and requeueing when an effective checkpoint review is blocked, including interruption before handoff creation; retain recovery after historical blockers are resolved.
+
 - Fix nonzero-exit handoff adjudication before retries and preserve human/runtime diagnostic signatures before worker output clipping; add combined failure, custom-policy and split UTF-8 regression coverage.
 
 - Add OpenClaw context-budget protection: default three-tick session rotation, final-prompt telemetry-based rotation at 60%/75%, bounded worker output capture, and durable run-bound handoffs. Missing telemetry falls back to the tick limit; in-turn thresholds and tool-output budgets are cooperative, not runtime interrupts.

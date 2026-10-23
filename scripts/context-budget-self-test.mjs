@@ -89,6 +89,31 @@ if (original !== scenario) { console.error(original.endsWith('-human-error') ? '
     if (scenario !== 'terminal') assert.notEqual(first.status, 'completed');
     if (scenario === 'oversized') assert.equal(await readBoundedJson(path.join(root, 'nonexistent')), null);
   }
+  // A durable blocker must survive the window before handoff creation.
+  for (const failure of ['overflow', 'abandoned', 'exhausted']) {
+    const root = await mkdtemp(path.join(tmpdir(), 'loop-context-no-handoff-'));
+    roots.push(root);
+    const worker = path.join(root, 'worker.mjs');
+    await writeFile(worker, `import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const e = process.env;
+await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
+const plan = JSON.parse(await readFile(e.LOOP_DEV_PLAN_FILE, 'utf8'));
+for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, cp.id + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: cp.id, status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
+console.error(${JSON.stringify(failure === 'abandoned' ? '"kind": "incomplete_turn"' : 'context_length_exceeded')});
+process.exitCode = ${failure === 'abandoned' ? 0 : 1};`);
+    await enqueueTask(root, { queue: 'test', title: 'blocker before handoff', task: 'Inspect local mocked data' });
+    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3, runtimeRecoveryMaxAttempts: failure === 'exhausted' ? 0 : 2 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const result = await runQueueOnce(root, options);
+    assert.equal(result.run.acceptanceReviews.blocked, 1);
+    assert.equal(result.run.finalJudgement.outcome, 'blocked');
+    assert.equal(result.status, 'needs_human_input', failure);
+    assert.equal(result.run.dispatchAttempts.length, 1);
+    const task = JSON.parse(await readFile(path.join(root, result.taskPath), 'utf8'));
+    assert.equal(task.runtimeSessionGeneration ?? 0, 0, 'blocked work must not rotate');
+    assert.equal(task.runtimeRecoveryCount ?? 0, 0, 'blocked work must not consume recovery');
+    assert.equal((await runQueueOnce(root, options)).processed, false, 'no replay without a handoff either');
+  }
   // Exercise the real output observer in a subprocess: no unbounded parse
   // buffer, byte-for-byte full logs, bound usage report and clipped runner tail.
   for (const scenario of ['json', 'oversized-output']) {

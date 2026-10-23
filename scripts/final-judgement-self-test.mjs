@@ -359,4 +359,13 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
   assert.equal(judgement.requires_human_gate, false);
 }
 
+
+// Recovery uses effective blockers, never a resolved historical checkpoint.
+for (const dispatchStatus of ['runtime_interrupted', 'runtime_blocked']) {
+  const judge = reviews => buildFinalJudgement(baseContract, basePlan, { checkpoints: [{ id: 'cp1' }] }, { count: reviews.length }, { reviews }, { dispatchStatus });
+  assert.equal(judge([{ checkpointId: 'cp1', status: 'blocked' }]).outcome, 'blocked');
+  assert.equal(judge([{ checkpointId: 'cp1', status: 'blocked' }, { checkpointId: 'cp2', status: 'accepted' }]).outcome, dispatchStatus);
+  assert.equal(judge([]).outcome, dispatchStatus);
+}
+
 console.log('final judgement self-test passed');
