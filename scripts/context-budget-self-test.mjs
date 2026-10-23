@@ -90,7 +90,7 @@ if (original !== scenario) { console.error(original.endsWith('-human-error') ? '
     if (scenario === 'oversized') assert.equal(await readBoundedJson(path.join(root, 'nonexistent')), null);
   }
   // A durable blocker must survive the window before handoff creation.
-  for (const failure of ['overflow', 'abandoned', 'exhausted']) {
+  for (const failure of ['overflow', 'abandoned', 'exhausted', 'ordinary', 'ordinary-single']) {
     const root = await mkdtemp(path.join(tmpdir(), 'loop-context-no-handoff-'));
     roots.push(root);
     const worker = path.join(root, 'worker.mjs');
@@ -100,19 +100,43 @@ const e = process.env;
 await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
 const plan = JSON.parse(await readFile(e.LOOP_DEV_PLAN_FILE, 'utf8'));
 for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, cp.id + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: cp.id, status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
-console.error(${JSON.stringify(failure === 'abandoned' ? '"kind": "incomplete_turn"' : 'context_length_exceeded')});
+console.error(${JSON.stringify(failure === 'abandoned' ? '"kind": "incomplete_turn"' : failure.startsWith('ordinary') ? 'generic worker failure' : 'context_length_exceeded')});
 process.exitCode = ${failure === 'abandoned' ? 0 : 1};`);
     await enqueueTask(root, { queue: 'test', title: 'blocker before handoff', task: 'Inspect local mocked data' });
-    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3, runtimeRecoveryMaxAttempts: failure === 'exhausted' ? 0 : 2 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const options = { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: failure === 'ordinary-single' ? 1 : 3, runtimeRecoveryMaxAttempts: failure === 'exhausted' ? 0 : 2 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
     const result = await runQueueOnce(root, options);
     assert.equal(result.run.acceptanceReviews.blocked, 1);
     assert.equal(result.run.finalJudgement.outcome, 'blocked');
     assert.equal(result.status, 'needs_human_input', failure);
+    assert.equal(result.run.revisionRequest, null, 'human blockers must not create development revisions');
     assert.equal(result.run.dispatchAttempts.length, 1);
     const task = JSON.parse(await readFile(path.join(root, result.taskPath), 'utf8'));
     assert.equal(task.runtimeSessionGeneration ?? 0, 0, 'blocked work must not rotate');
     assert.equal(task.runtimeRecoveryCount ?? 0, 0, 'blocked work must not consume recovery');
     assert.equal((await runQueueOnce(root, options)).processed, false, 'no replay without a handoff either');
+  }
+  // Ordinary failures still retry without blockers, or after a later snapshot
+  // resolves a historical blocker. Test through the real dispatch loop.
+  for (const scenario of ['absent', 'resolved']) {
+    const root = await mkdtemp(path.join(tmpdir(), 'loop-retry-control-'));
+    roots.push(root);
+    const worker = path.join(root, 'worker.mjs');
+    await writeFile(worker, `import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+const e = process.env;
+await mkdir(e.LOOP_CHECKPOINTS_DIR, { recursive: true });
+if (${JSON.stringify(scenario)} === 'resolved') {
+  for (const [id, blockers] of [['cp1', ['Await approval']], ['cp2', []]]) {
+    await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, id + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: id, status: blockers.length ? 'needs_human_input' : 'in_progress', summary: 'Local progress', blockers, verification: [], risks: [], next_action: 'Continue local verification' }));
+  }
+}
+console.error('generic worker failure');
+process.exitCode = 1;`);
+    await enqueueTask(root, { queue: 'test', title: scenario, task: 'Inspect local mocked data' });
+    const result = await runQueueOnce(root, { queue: 'test', dispatcher: `node '${worker}'`, retry: { maxAttempts: 3 }, checkpointPollMs: 0, progressHeartbeatMs: 0 });
+    assert.equal(result.run.dispatchAttempts.length, 3, scenario);
+    assert.equal(result.status, 'failed', scenario);
+    assert.equal(result.run.finalJudgement.outcome, 'needs_revision', scenario);
   }
   // Exercise the real output observer in a subprocess: no unbounded parse
   // buffer, byte-for-byte full logs, bound usage report and clipped runner tail.

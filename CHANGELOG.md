@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Check effective blocked checkpoints before each ordinary dispatch retry, even without a handoff. Preserve human-blocked classification for ordinary/verification failures without creating development revisions; resolved historical blockers still allow retries.
+
 - Stop runtime recovery and requeueing when an effective checkpoint review is blocked, including interruption before handoff creation; retain recovery after historical blockers are resolved.
 
 - Fix nonzero-exit handoff adjudication before retries and preserve human/runtime diagnostic signatures before worker output clipping; add combined failure, custom-policy and split UTF-8 regression coverage.
