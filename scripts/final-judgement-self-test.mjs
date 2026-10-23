@@ -344,7 +344,7 @@ assert.equal(inferTaskScope({ body: 'Continue the overall project with a product
       projectCompletion: { status: 'complete' }, checkpointRisks: []
     },
     {
-      checkpointId: 'cp21', sequence: 21, status: 'blocked',
+      checkpointId: 'cp21', sequence: 21, status: 'accepted',
       projectCompletion: { status: 'needs_human_acceptance' },
       checkpointNextAction: 'owner accepts broader OpenReel v4 project'
     }
@@ -425,4 +425,26 @@ for (const checkpoints of [[{ id: 'm' }], [{ id: 'm' }, { id: 'other' }]]) {
     { checkpointId: 'done', sequence: 1, status: 'accepted', taskTerminal: true },
     { checkpointId: 'pending', sequence: 2, status: 'blocked' }
   ] }).some(r => r.status === 'blocked'), true, 'terminal cannot swallow a later task blocker');
+}
+
+// A broader-project label must never launder a failed/blocked task review.
+for (const status of ['blocked', 'revise']) {
+  for (const dispatchStatus of ['completed', 'failed', 'verify_failed', 'runtime_interrupted', 'runtime_blocked']) {
+    const terminal = { checkpointId: 'done', sequence: 1, status: 'accepted', projectCompletion: { status: 'complete' } };
+    const later = { checkpointId: 'progress', sequence: 2, status, projectCompletion: { status: 'needs_human_acceptance' } };
+    for (const reviews of [[terminal, later], [later, terminal]]) {
+      const judgement = buildFinalJudgement(baseContract, basePlan, { checkpoints: [{ id: 'cp1' }] }, { count: 2 }, { reviews }, { dispatchStatus });
+      assert.deepEqual(judgement.coverage.effective_review_ids, ['progress']);
+      assert.equal(judgement.coverage.terminal_lock, false);
+      if (status === 'blocked') assert.equal(judgement.outcome, 'blocked');
+    }
+  }
+}
+// Even accepted governance cannot hide a materializable deferred gate.
+{
+  const reviews = [
+    { checkpointId: 'done', sequence: 1, status: 'accepted', projectCompletion: 'complete' },
+    { checkpointId: 'gate', sequence: 2, status: 'accepted', projectCompletion: 'needs_human_acceptance', deferredGates: [{ action: 'send' }] }
+  ];
+  assert.deepEqual(selectEffectiveAcceptanceReviews({ checkpoints: [{ id: 'cp1' }] }, { reviews }).map(r => r.checkpointId), ['gate']);
 }

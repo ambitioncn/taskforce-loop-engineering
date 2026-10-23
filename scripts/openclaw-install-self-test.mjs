@@ -28,8 +28,8 @@ else {
     const dir = path.resolve(process.cwd(), process.env.LOOP_CHECKPOINTS_DIR);
     await mkdir(dir, { recursive: true });
     if (process.env.LOOP_REVIEW_TEST) {
-      for (const [id, sequence, blockers] of [['cp99', 1, []], ['progress-latest', 2, ['Unknown external outcome']]]) await writeFile(path.join(dir, id + '.json'), JSON.stringify({ task_id: process.env.LOOP_TASK_ID, checkpoint_id: id, sequence, status: blockers.length ? 'needs_human_input' : 'in_progress', summary: 'Mock progress', blockers, risks: [], verification: [] }));
-      console.error(process.env.LOOP_REVIEW_TEST === 'overflow' ? 'context_length_exceeded' : 'generic worker failure');
+      for (const [id, sequence, blockers] of [['cp99', 1, []], ['progress-latest', 2, ['Unknown external outcome']]]) await writeFile(path.join(dir, id + '.json'), JSON.stringify({ task_id: process.env.LOOP_TASK_ID, checkpoint_id: id, sequence, status: blockers.length ? 'needs_human_input' : 'ready_for_acceptance', project_completion: process.env.LOOP_REVIEW_TEST.startsWith('terminal-') ? { status: sequence === 1 ? 'complete' : 'needs_human_acceptance' } : undefined, summary: 'Mock progress', blockers, risks: [], verification: [{ command: 'mock check', outcome: 'passed' }] }));
+      console.error(process.env.LOOP_REVIEW_TEST.endsWith('overflow') ? 'context_length_exceeded' : 'generic worker failure');
       process.exit(1);
     }
     await writeFile(path.join(dir, 'cp1.json'), JSON.stringify({ version: 1, task_id: process.env.LOOP_TASK_ID, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Read-only smoke completed.', files_changed: [], verification: [{ command: 'mock smoke', outcome: 'passed' }], blockers: [], risks: [], next_action: 'acceptance_review' }));
@@ -96,7 +96,7 @@ const largePrompt = largeArgs[largeArgs.indexOf('--message') + 1];
 if (Buffer.byteLength(largePrompt) > 16384 || !largePrompt.includes(largeTaskFile) || !largePrompt.includes('CONTEXT BUDGET') || !largeArgs.includes('agent:builder:loop-task-large-task-g3')) throw new Error('generated dispatcher lost bounded prompt, file reference, context instructions or session generation');
 // The generated dispatcher/observer must preserve checkpoint gating through
 // actual queue retries and overflow recovery, not just prompt source checks.
-for (const failure of ['ordinary', 'overflow']) {
+for (const failure of ['ordinary', 'overflow', 'terminal-ordinary', 'terminal-overflow']) {
   await enqueueTask(root, { queue: 'review-order', title: failure, task: 'Inspect mocked local data' });
   const options = { queue: 'review-order', dispatcher: `LOOP_REVIEW_TEST=${failure} node scripts/loops/openclaw-loop-dispatch.mjs`, retry: { ...queue.retry, maxAttempts: 3 }, checkpointPollMs: 0, progressHeartbeatMs: 0 };
   const result = await runQueueOnce(root, options);

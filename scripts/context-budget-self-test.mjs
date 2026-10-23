@@ -90,7 +90,7 @@ if (original !== scenario) { console.error(original.endsWith('-human-error') ? '
     if (scenario === 'oversized') assert.equal(await readBoundedJson(path.join(root, 'nonexistent')), null);
   }
   // A durable blocker must survive the window before handoff creation.
-  for (const chronology of ['single', 'arbitrary-id', 'id-restart', 'missing', 'conflict']) {
+  for (const chronology of ['single', 'arbitrary-id', 'id-restart', 'missing', 'conflict', 'terminal']) {
   for (const failure of ['overflow', 'abandoned', 'exhausted', 'ordinary', 'ordinary-single']) {
     const root = await mkdtemp(path.join(tmpdir(), 'loop-context-no-handoff-'));
     roots.push(root);
@@ -103,8 +103,8 @@ const plan = JSON.parse(await readFile(e.LOOP_DEV_PLAN_FILE, 'utf8'));
 const chronology = ${JSON.stringify(chronology)};
 const oldId = chronology === 'id-restart' ? 'cp99' : 'cp1';
 const newId = chronology === 'id-restart' ? 'cp1' : 'progress-latest';
-if (chronology !== 'single') await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, oldId + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, checkpoint_id: oldId, sequence: chronology === 'missing' ? undefined : chronology === 'conflict' ? 3 : 1, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:00:00Z', status: 'in_progress', summary: 'Old progress', blockers: [], risks: [], verification: [] }));
-for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, (chronology === 'single' ? cp.id : newId) + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: chronology === 'single' ? cp.id : newId, sequence: chronology === 'missing' ? undefined : 2, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:01:00Z', status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
+if (chronology !== 'single') await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, oldId + '.json'), JSON.stringify({ task_id: e.LOOP_TASK_ID, checkpoint_id: oldId, sequence: chronology === 'missing' ? undefined : chronology === 'conflict' ? 3 : 1, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:00:00Z', status: chronology === 'terminal' ? 'ready_for_acceptance' : 'in_progress', project_completion: chronology === 'terminal' ? { status: 'complete' } : undefined, summary: 'Old progress', blockers: [], risks: [], verification: chronology === 'terminal' ? [{ command: 'mock check', outcome: 'passed' }] : [] }));
+for (const cp of plan.checkpoints) await writeFile(path.join(e.LOOP_CHECKPOINTS_DIR, (chronology === 'single' ? cp.id : newId) + '.json'), JSON.stringify({ version: 1, task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: chronology === 'single' ? cp.id : newId, sequence: chronology === 'missing' ? undefined : 2, created_at: chronology === 'missing' ? undefined : '2026-10-23T00:01:00Z', project_completion: chronology === 'terminal' ? { status: 'needs_human_acceptance' } : undefined, status: 'needs_human_input', summary: 'External outcome unknown', files_changed: [], verification: [], blockers: ['Payment outcome unknown; reconcile before replay'], risks: [], next_action: 'Wait for human confirmation' }));
 console.error(${JSON.stringify(failure === 'abandoned' ? '"kind": "incomplete_turn"' : failure.startsWith('ordinary') ? 'generic worker failure' : 'context_length_exceeded')});
 process.exitCode = ${failure === 'abandoned' ? 0 : 1};`);
     await enqueueTask(root, { queue: 'test', title: 'blocker before handoff', task: 'Inspect local mocked data' });
