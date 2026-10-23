@@ -21,7 +21,14 @@ if (args.includes('--account') && args[args.indexOf('--account') + 1] === 'docto
   console.error('Unknown account: doctor');
   process.exit(1);
 }
+if (args[0] === 'message' && process.env.TEST_IM_CHANNEL) {
+  const value = (flag) => args[args.indexOf(flag) + 1];
+  if (!args.includes('--dry-run') || value('--channel') !== process.env.TEST_IM_CHANNEL || value('--account') !== (process.env.TEST_IM_ACCOUNT || 'main')) {
+    console.error('Wrong channel/account or unsafe notification'); process.exit(1);
+  }
+}
 if (args[0] === '--version') console.log('OpenClaw mock 1.0');
+else if (args[0] === 'channels' && args[1] === 'list') console.log(JSON.stringify({ chat: { [process.env.TEST_IM_CHANNEL || 'feishu']: [process.env.TEST_IM_ACCOUNT || 'main'] } }));
 else if (args[0] === 'agents' && args[1] === 'list') console.log(JSON.stringify([{ id: 'builder' }]));
 else {
   if (args[0] === 'agent' && process.env.LOOP_CHECKPOINTS_DIR) {
@@ -236,6 +243,8 @@ const deliveredArgs = JSON.parse(await readFile(deliveryCapture, 'utf8'));
 for (const expected of ['message', 'send', '--channel', 'slack', '--target', 'channel:C123', '--account', 'work', '--reply-to', 'M456', 'async result']) {
   if (!deliveredArgs.includes(expected)) throw new Error(`notifier did not forward ${expected}`);
 }
+process.env.TEST_IM_CHANNEL = process.env.DIAGNOSTIC_TEST_CHANNEL || 'feishu';
+process.env.TEST_IM_ACCOUNT = 'diagnostic-account';
 const doctor = new URL('./openclaw-doctor.mjs', import.meta.url).pathname;
 const doctorResult = await new Promise((resolve) => {
   const child = spawn(process.execPath, [doctor, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -266,8 +275,12 @@ const smokeResult = await new Promise((resolve) => {
 });
 if (smokeResult.code !== 0) throw new Error(`smoke failed: ${smokeResult.stderr}`);
 const smokeReport = JSON.parse(smokeResult.stdout);
+assert.equal(smokeReport.notificationSource.channel, process.env.TEST_IM_CHANNEL);
+assert.equal(smokeReport.notificationSource.account, 'diagnostic-account');
 if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
 if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('smoke notification forwarded a synthetic account');
+delete process.env.TEST_IM_CHANNEL;
+delete process.env.TEST_IM_ACCOUNT;
 try { await readFile(path.join(root, `configs/loops/queues/${smokeReport.smokeQueue}.json`)); throw new Error('smoke config was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 try { await readFile(path.join(root, `runtime/loops/${smokeReport.smokeQueue}/state.json`)); throw new Error('smoke runtime was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs', 'scripts/loops/openclaw-loop-gate.mjs']) {
