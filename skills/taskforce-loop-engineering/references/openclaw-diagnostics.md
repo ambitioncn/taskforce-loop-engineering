@@ -16,6 +16,12 @@ This procedure applies to OpenClaw; it does not change Hermes diagnostics.
    workspace, not an OpenClaw profile. Both commands accept `--openclaw-bin`
    for the selected executable; retain that profile's normal environment.
    Inspect `openclaw channels list --json` using that same CLI/environment.
+   Doctor resolves executable aliases and requires the same executable as the
+   install manifest, plus unchanged manifest hashes for notifier/dispatcher.
+   A missing/incomplete manifest, different CLI, or caller drift fails
+   `diagnostic_runtime`: no notification probe or smoke worker runs. Choose
+   the installed CLI or repair the integration within the authorized scope;
+   `--openclaw-bin` does not rewrite installed callers.
    Never print channel credentials to diagnose selection.
 3. Run doctor. Without source filters, it discovers channel/account pairs from
    the inventory and dry-runs each through the installed notifier. Inspect
@@ -52,7 +58,11 @@ loop-engineering-openclaw-smoke --root /path/to/workspace --queue agent-tasks --
 
 Targets are synthetic by default. Discovery failure, malformed/empty channel
 inventory or unmatched filters must fail closed; never fall back to Feishu or
-silently drop the account. Correct the profile or selection instead of editing
+silently drop the account. Within the selected channels, malformed account
+lists or non-string/blank account entries fail even alongside valid entries
+and even when an account filter would exclude them. An explicit channel filter
+excludes unrelated channels from validation. Empty account arrays are valid,
+but fail selection if no matching accounts remain. Correct the profile or selection instead of editing
 a temporary test script to hardcode another IM.
 
 ## Evidence boundaries

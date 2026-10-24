@@ -2,7 +2,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { diagnosticSources } from '../lib/openclaw-diagnostic-source.mjs';
+import { diagnosticSources, verifyDiagnosticRuntime } from '../lib/openclaw-diagnostic-source.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: 'main', openclawBin: 'openclaw', json: false };
@@ -73,11 +73,17 @@ async function main() {
       checks.push({ id: 'queue_config', ok: queue.queue === args.queue && queue.dispatcher === 'node scripts/loops/openclaw-loop-dispatch.mjs' });
     } catch (error) { checks.push({ id: 'queue_config', ok: false, detail: error.message }); }
   }
+  let runtimeVerified = false;
+  try {
+    const executable = await verifyDiagnosticRuntime(args);
+    runtimeVerified = true;
+    checks.push({ id: 'diagnostic_runtime', ok: true, detail: executable });
+  } catch (error) { checks.push({ id: 'diagnostic_runtime', ok: false, detail: error.message }); }
   const notifier = path.join(args.root, 'scripts/loops/openclaw-loop-notify.mjs');
   let notificationSources = [];
   try { notificationSources = await diagnosticSources(args, run); }
   catch (error) { checks.push({ id: 'notification_channels', ok: false, detail: error.message }); }
-  if (await present(notifier)) {
+  if (runtimeVerified && await present(notifier)) {
     for (const source of notificationSources) {
       const smoke = await run(process.execPath, [notifier, 'Loop Engineering notification dry-run'], {
         cwd: args.root,

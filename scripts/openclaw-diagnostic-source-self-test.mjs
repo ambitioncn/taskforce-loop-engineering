@@ -13,3 +13,15 @@ assert.equal((await diagnosticSources({ ...args, sourceAccount: 'other', sourceT
 for (const selection of [{ sourceChannel: 'absent' }, { sourceAccount: 'missing' }]) await assert.rejects(diagnosticSources({ ...args, ...selection }, run), /No matching/);
 for (const result of [{ code: 1 }, { code: 0, stdout: 'not json' }, { code: 0, stdout: '{}' }, { code: 0, stdout: '{"chat":{}}' }]) await assert.rejects(diagnosticSources(args, async () => result));
 console.log('diagnostic source selection: passed');
+
+for (const broken of [null, {}, 'accounts', { accounts: 'bad' }, ['personal', 42], ['personal', ''], ['personal', '   '], ['personal', null]]) {
+  const mixed = async () => ({ code: 0, stdout: JSON.stringify({ chat: { telegram: ['personal'], slack: broken } }) });
+  await assert.rejects(diagnosticSources(args, mixed), /Malformed/);
+  await assert.rejects(diagnosticSources({ ...args, sourceAccount: 'personal' }, mixed), /Malformed/);
+  assert.equal((await diagnosticSources({ ...args, sourceChannel: 'telegram' }, mixed)).length, 1);
+  await assert.rejects(diagnosticSources({ ...args, sourceChannel: 'slack' }, mixed), /Malformed/);
+}
+const empty = async () => ({ code: 0, stdout: JSON.stringify({ chat: { telegram: ['personal'], slack: [] } }) });
+assert.equal((await diagnosticSources(args, empty)).length, 1);
+await assert.rejects(diagnosticSources({ ...args, sourceChannel: 'slack' }, empty), /No matching/);
+console.log('mixed-validity inventory regression: passed');
