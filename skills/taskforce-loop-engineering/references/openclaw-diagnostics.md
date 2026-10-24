@@ -2,9 +2,9 @@
 
 ## Compatibility and scope
 
-This procedure describes the multi-IM source change, not the published 0.16.1
-package. Until a release containing it is installed, use the reviewed source
-candidate for validation and report installed diagnostics as unchanged. Do not
+This procedure requires package version 0.16.2 or newer; 0.16.1 does not
+include these capabilities. Until a compatible release is installed, use a reviewed
+source candidate for validation and report installed diagnostics as unchanged. Do not
 pass new flags to an old binary or claim that updating the skill upgrades code.
 This procedure applies to OpenClaw; it does not change Hermes diagnostics.
 
