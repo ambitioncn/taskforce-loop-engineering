@@ -74,3 +74,20 @@ messaging requires separate authorization and observed delivery/receipt.
 Do not infer universal IM support from Feishu, Telegram and Slack mock tests;
 other configured plugins need their own acceptance evidence. Keep diagnostic
 coverage distinct from production notification and human-gate support.
+
+### Diagnostic invocation and environment isolation
+
+After checking executable identity and managed caller hashes, doctor uses the
+exact CLI invocation recorded by installation for version, agent, channel and
+notification checks. PATH/symlink aliases remain accepted when they resolve to
+the same executable, but their invocation names are not used to select a second
+profile. To change the installed profile, explicitly repair the integration.
+Equal realpaths alone do not establish profile equivalence for name-sensitive
+wrappers.
+
+Doctor notification probes and smoke subprocesses discard inherited
+`LOOP_HUMAN_INPUT_SOURCE` and `LOOP_NOTIFICATION_SOURCE` before supplying their
+own discovered/task source. Production human-gate source precedence is unchanged.
+Regression checks compare reported channel/account/target against captured
+message arguments (including `--dry-run`), with conflicting inherited sources,
+multiple accounts, and invocation-name-sensitive wrappers.

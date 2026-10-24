@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { diagnosticEnvironment } from '../lib/openclaw-diagnostic-source.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: 'main', openclawBin: 'openclaw', loopBin: 'loop-engineering', json: false, keepArtifacts: false };
@@ -29,7 +30,7 @@ function parseArgs(argv) {
 
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env || process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd: options.cwd, env: diagnosticEnvironment(options.env || process.env), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });

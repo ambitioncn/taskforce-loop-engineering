@@ -2,7 +2,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { diagnosticSources, verifyDiagnosticRuntime } from '../lib/openclaw-diagnostic-source.mjs';
+import { diagnosticSources, verifyDiagnosticRuntime, diagnosticEnvironment } from '../lib/openclaw-diagnostic-source.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: 'main', openclawBin: 'openclaw', json: false };
@@ -60,6 +60,13 @@ async function main() {
   );
   const checks = [];
   for (const relative of required) checks.push({ id: `file:${relative}`, ok: await present(path.join(args.root, relative)) });
+  let runtimeVerified = false;
+  try {
+    const executable = await verifyDiagnosticRuntime(args);
+    args.openclawBin = executable;
+    runtimeVerified = true;
+    checks.push({ id: 'diagnostic_runtime', ok: true, detail: executable });
+  } catch (error) { checks.push({ id: 'diagnostic_runtime', ok: false, detail: error.message }); }
   const cli = await run(args.openclawBin, ['--version'], { cwd: args.root });
   checks.push({ id: 'openclaw_cli', ok: cli.code === 0, detail: (cli.stdout || cli.stderr).trim().slice(0, 300) });
   const agentsResult = await run(args.openclawBin, ['agents', 'list', '--json'], { cwd: args.root });
@@ -73,21 +80,15 @@ async function main() {
       checks.push({ id: 'queue_config', ok: queue.queue === args.queue && queue.dispatcher === 'node scripts/loops/openclaw-loop-dispatch.mjs' });
     } catch (error) { checks.push({ id: 'queue_config', ok: false, detail: error.message }); }
   }
-  let runtimeVerified = false;
-  try {
-    const executable = await verifyDiagnosticRuntime(args);
-    runtimeVerified = true;
-    checks.push({ id: 'diagnostic_runtime', ok: true, detail: executable });
-  } catch (error) { checks.push({ id: 'diagnostic_runtime', ok: false, detail: error.message }); }
   const notifier = path.join(args.root, 'scripts/loops/openclaw-loop-notify.mjs');
   let notificationSources = [];
-  try { notificationSources = await diagnosticSources(args, run); }
+  try { if (runtimeVerified) notificationSources = await diagnosticSources(args, run); }
   catch (error) { checks.push({ id: 'notification_channels', ok: false, detail: error.message }); }
   if (runtimeVerified && await present(notifier)) {
     for (const source of notificationSources) {
       const smoke = await run(process.execPath, [notifier, 'Loop Engineering notification dry-run'], {
         cwd: args.root,
-        env: { ...process.env, LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify(source) }
+        env: { ...diagnosticEnvironment(), LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify(source) }
       });
       checks.push({ id: 'notification_dry_run', channel: source.channel, account: source.account, ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim().slice(0, 500) });
     }

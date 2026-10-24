@@ -14,9 +14,10 @@ const systemctlCapture = path.join(root, 'systemctl-calls.jsonl');
 process.env.XDG_CONFIG_HOME = path.join(root, 'xdg');
 process.env.SYSTEMCTL_CAPTURE = systemctlCapture;
 await writeFile(mockOpenClaw, `#!/usr/bin/env node
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 const args = process.argv.slice(2);
+if (process.env.DIAGNOSTIC_CALLS) await appendFile(process.env.DIAGNOSTIC_CALLS, JSON.stringify({ invocation: process.env.TEST_INVOKED_AS, args }) + '\\n');
 if (args.includes('--account') && args[args.indexOf('--account') + 1] === 'doctor') {
   console.error('Unknown account: doctor');
   process.exit(1);
@@ -288,6 +289,53 @@ const alias = path.join(root, 'alias-openclaw');
 await symlink(mockOpenClaw, alias);
 assert.equal((await diagnosticRun(doctor, alias)).code, 0);
 assert.equal((await diagnosticRun(doctor, path.basename(mockOpenClaw), { PATH: root + path.delimiter + process.env.PATH })).code, 0);
+// Conflicting inherited sources must never override any reported route.
+const callsFile = path.join(root, 'diagnostic-calls.jsonl');
+const staleEnv = {
+  LOOP_HUMAN_INPUT_SOURCE: JSON.stringify({ channel: 'feishu', account: 'stale', target: 'user:stale' }),
+  LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'slack', account: 'stale', target: 'channel:stale' }),
+  DIAGNOSTIC_CALLS: callsFile
+};
+async function capturedCalls() {
+  return (await readFile(callsFile, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+function assertRoutes(calls, sources) {
+  const messages = calls.filter((call) => call.args[0] === 'message');
+  assert.equal(messages.length, sources.length);
+  messages.forEach(({ args }, index) => {
+    const value = (flag) => args[args.indexOf(flag) + 1];
+    assert.ok(args.includes('--dry-run'));
+    assert.equal(value('--channel'), sources[index].channel);
+    assert.equal(value('--account'), sources[index].account);
+    assert.equal(value('--target'), sources[index].target);
+  });
+}
+await writeFile(callsFile, '');
+const multi = await diagnosticRun(doctor, mockOpenClaw, { ...staleEnv, TEST_IM_CHANNEL: '', TEST_BROKEN_INVENTORY: JSON.stringify({ chat: { telegram: ['one', 'two'], slack: { accounts: ['team'] } } }) });
+assert.equal(multi.code, 0, multi.stderr);
+assertRoutes(await capturedCalls(), JSON.parse(multi.stdout).notificationSources);
+
+// A shared shell wrapper selects its profile from $0 (not realpath).
+// Even when the caller supplies the B alias, all probes must use installed A.
+const originalMock = await readFile(mockOpenClaw, 'utf8');
+const backingMock = path.join(root, 'backing-mock.mjs');
+await writeFile(backingMock, originalMock);
+try {
+  await writeFile(mockOpenClaw, `#!/bin/sh
+export TEST_INVOKED_AS="$0"
+case "$0" in *alias-openclaw) export TEST_IM_CHANNEL=telegram TEST_IM_ACCOUNT=profile-b ;; esac
+exec node "$(dirname "$0")/backing-mock.mjs" "$@"
+`);
+  await writeFile(callsFile, '');
+  const profiled = await diagnosticRun(doctor, alias, staleEnv);
+  assert.equal(profiled.code, 0, profiled.stderr);
+  const report = JSON.parse(profiled.stdout);
+  assert.equal(report.notificationSources[0].channel, process.env.TEST_IM_CHANNEL);
+  const calls = await capturedCalls();
+  assert.ok(calls.some((call) => call.args[0] === 'channels'));
+  assert.ok(calls.every((call) => call.invocation === mockOpenClaw));
+  assertRoutes(calls, report.notificationSources);
+} finally { await writeFile(mockOpenClaw, originalMock); }
 // A stale/tampered generated caller must fail even if manifest CLI matches.
 const notifierPath = path.join(root, 'scripts/loops/openclaw-loop-notify.mjs');
 const notifierOriginal = await readFile(notifierPath, 'utf8');
@@ -311,8 +359,9 @@ if (!smokeSource.includes('Do not change user or project files, configuration, c
   throw new Error('OpenClaw smoke permission boundary or checkpoint requirement is missing');
 }
 const loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+await writeFile(callsFile, '');
 const smokeResult = await new Promise((resolve) => {
-  const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { env: { ...process.env, ...staleEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -322,6 +371,7 @@ if (smokeResult.code !== 0) throw new Error(`smoke failed: ${smokeResult.stderr}
 const smokeReport = JSON.parse(smokeResult.stdout);
 assert.equal(smokeReport.notificationSource.channel, process.env.TEST_IM_CHANNEL);
 assert.equal(smokeReport.notificationSource.account, 'diagnostic-account');
+assertRoutes(await capturedCalls(), [smokeReport.notificationSource, smokeReport.notificationSource]);
 if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
 if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('smoke notification forwarded a synthetic account');
 delete process.env.TEST_IM_CHANNEL;
