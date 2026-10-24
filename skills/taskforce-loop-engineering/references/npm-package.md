@@ -1,7 +1,14 @@
 # npm Package
 
 Package name: `taskforce-loop-engineering`
-Version: `0.15.19`
+Version source: the candidate checkout's `package.json`; do not infer the installed
+or public-registry version from this skill. Check the actual installed package
+and `npm view taskforce-loop-engineering version` separately.
+
+The multi-IM OpenClaw diagnostic changes require `0.16.2` or newer;
+the `0.16.1` package does not support them. A skill update alone does
+not install these capabilities. See [OpenClaw multi-IM diagnostics](openclaw-diagnostics.md)
+for capability checks, channel/account selection, and acceptance boundaries.
 
 Install from npm:
 

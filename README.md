@@ -1423,3 +1423,15 @@ https://clawhub.ai/ambitioncn/skills/taskforce-loop-engineering
 # P2 multi-agent control plane
 
 Loop Engineering includes typed executable todos with capability/authority-aware atomic claim, lease and fencing, deterministic dependency/quota scheduling, durable peer handoff, orphan recovery, and P0/P1 safety integration. See [docs/multi-agent-control-plane.md](docs/multi-agent-control-plane.md) for the data contract, CLI, and migration path.
+
+### Multi-IM diagnostic probes
+
+OpenClaw doctor discovers channels/accounts using `openclaw channels list --json`
+in the selected CLI/profile environment and dry-runs each configured account. It
+does not assume Feishu. Smoke uses the first successfully checked source; choose
+a specific route with `--source-channel telegram --source-account personal`. Both
+commands accept `--source-target` for channel plugins requiring a special target
+format. Targets are synthetic by default and notification probes always use
+dry-run; success does not prove real delivery. Missing/invalid inventories and
+unmatched explicit selections fail rather than silently falling back to Feishu.
+Smoke still executes a real isolated worker task and cleans its temporary queue.

@@ -2,6 +2,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { diagnosticSources, verifyDiagnosticRuntime, diagnosticEnvironment } from '../lib/openclaw-diagnostic-source.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: 'main', openclawBin: 'openclaw', json: false };
@@ -11,6 +12,12 @@ function parseArgs(argv) {
     else if (arg === '--queue') out.queue = argv[++i];
     else if (arg === '--worker-agent') out.workerAgent = argv[++i];
     else if (arg === '--openclaw-bin') out.openclawBin = argv[++i];
+    else if (['--source-channel', '--source-account', '--source-target'].includes(arg)) {
+      const key = { '--source-channel': 'sourceChannel', '--source-account': 'sourceAccount', '--source-target': 'sourceTarget' }[arg];
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
+      out[key] = value;
+    }
     else if (arg === '--json') out.json = true;
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -34,7 +41,7 @@ async function present(file) { try { await access(file); return true; } catch { 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: loop-engineering-openclaw-doctor [--root workspace] [--queue agent-tasks] [--worker-agent main] [--openclaw-bin openclaw] [--json]');
+    console.log('Usage: loop-engineering-openclaw-doctor [--root workspace] [--queue agent-tasks] [--worker-agent main] [--openclaw-bin openclaw] [--source-channel channel] [--source-account account] [--source-target dry-run-target] [--json]');
     return;
   }
   const required = [
@@ -53,6 +60,13 @@ async function main() {
   );
   const checks = [];
   for (const relative of required) checks.push({ id: `file:${relative}`, ok: await present(path.join(args.root, relative)) });
+  let runtimeVerified = false;
+  try {
+    const executable = await verifyDiagnosticRuntime(args);
+    args.openclawBin = executable;
+    runtimeVerified = true;
+    checks.push({ id: 'diagnostic_runtime', ok: true, detail: executable });
+  } catch (error) { checks.push({ id: 'diagnostic_runtime', ok: false, detail: error.message }); }
   const cli = await run(args.openclawBin, ['--version'], { cwd: args.root });
   checks.push({ id: 'openclaw_cli', ok: cli.code === 0, detail: (cli.stdout || cli.stderr).trim().slice(0, 300) });
   const agentsResult = await run(args.openclawBin, ['agents', 'list', '--json'], { cwd: args.root });
@@ -67,12 +81,17 @@ async function main() {
     } catch (error) { checks.push({ id: 'queue_config', ok: false, detail: error.message }); }
   }
   const notifier = path.join(args.root, 'scripts/loops/openclaw-loop-notify.mjs');
-  if (await present(notifier)) {
-    const smoke = await run(process.execPath, [notifier, 'Loop Engineering notification dry-run'], {
-      cwd: args.root,
-      env: { ...process.env, LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'feishu', target: 'user:loop-doctor-dry-run', reply_to: 'doctor-message' }) }
-    });
-    checks.push({ id: 'notification_dry_run', ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim().slice(0, 500) });
+  let notificationSources = [];
+  try { if (runtimeVerified) notificationSources = await diagnosticSources(args, run); }
+  catch (error) { checks.push({ id: 'notification_channels', ok: false, detail: error.message }); }
+  if (runtimeVerified && await present(notifier)) {
+    for (const source of notificationSources) {
+      const smoke = await run(process.execPath, [notifier, 'Loop Engineering notification dry-run'], {
+        cwd: args.root,
+        env: { ...diagnosticEnvironment(), LOOP_NOTIFICATION_DRY_RUN: '1', LOOP_NOTIFICATION_SOURCE: JSON.stringify(source) }
+      });
+      checks.push({ id: 'notification_dry_run', channel: source.channel, account: source.account, ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim().slice(0, 500) });
+    }
   }
   const gateBridge = path.join(args.root, 'scripts/loops/openclaw-loop-gate.mjs');
   if (await present(gateBridge)) {
@@ -82,7 +101,7 @@ async function main() {
     checks.push({ id: 'human_gate_bridge_self_test', ok: selfTest.code === 0 && /"externalWrite":false/.test(selfTest.stdout), detail: (selfTest.stdout || selfTest.stderr).trim().slice(0, 500) });
   }
   const failed = checks.filter((check) => !check.ok);
-  const report = { version: 1, status: failed.length ? 'fail' : 'ok', readOnly: true, externalWrite: false, root: args.root, queue: args.queue, workerAgent: args.workerAgent, checks, failed: failed.map((check) => check.id) };
+  const report = { version: 1, status: failed.length ? 'fail' : 'ok', readOnly: true, externalWrite: false, root: args.root, queue: args.queue, workerAgent: args.workerAgent, notificationSources, checks, failed: failed.map((check) => check.id) };
   console.log(args.json ? JSON.stringify(report, null, 2) : `OpenClaw Loop doctor: ${report.status}\nchecks: ${checks.length - failed.length}/${checks.length}\nfailed: ${report.failed.join(', ') || 'none'}`);
   if (failed.length) process.exitCode = 1;
 }

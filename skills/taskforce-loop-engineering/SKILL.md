@@ -90,6 +90,12 @@ loop-engineering-openclaw-smoke \
 
 If the CLI or integration is missing and the user requested installation or repair, install it within the authorized host/workspace scope, then run doctor and the disposable smoke. If the user only asked what is missing, report the exact package, repository, commands, and current deployment state without mutating the system.
 
+### Multi-IM Diagnostic Acceptance
+
+Before OpenClaw doctor/smoke, follow [the multi-IM diagnostic procedure](references/openclaw-diagnostics.md): select the correct CLI/profile, check installed capabilities, and discover actual channels/accounts rather than assuming Feishu. Doctor probes all matching accounts; smoke exercises one selected source per run. For multi-channel acceptance, explicitly test each required channel/account pair and record the coverage.
+
+Notification probes are dry-run only, not evidence of real delivery or authenticated inbound approval support. Smoke still executes a real worker in a disposable queue. Updating this skill alone does not upgrade the installed CLI; the discovery/selection behavior requires package version 0.16.2 or newer; 0.16.1 does not include it.
+
 ### Hermes Agent Integration
 
 The core CLI is platform-neutral, but Hermes conversation routing requires its own dispatcher and notifier. Generate a plan and verify its installation confirmation summary identifies Hermes, the absolute Hermes CLI path, intended workspace and queue, systemd scheduler, source-bound notification routing, and `writes enabled: no (plan only)`. If any field identifies the wrong platform or destination, stop. Confirm installation only after that review, then run the read-only doctor and disposable smoke:

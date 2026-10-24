@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,14 +14,22 @@ const systemctlCapture = path.join(root, 'systemctl-calls.jsonl');
 process.env.XDG_CONFIG_HOME = path.join(root, 'xdg');
 process.env.SYSTEMCTL_CAPTURE = systemctlCapture;
 await writeFile(mockOpenClaw, `#!/usr/bin/env node
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 const args = process.argv.slice(2);
+if (process.env.DIAGNOSTIC_CALLS) await appendFile(process.env.DIAGNOSTIC_CALLS, JSON.stringify({ invocation: process.env.TEST_INVOKED_AS, args }) + '\\n');
 if (args.includes('--account') && args[args.indexOf('--account') + 1] === 'doctor') {
   console.error('Unknown account: doctor');
   process.exit(1);
 }
+if (args[0] === 'message' && process.env.TEST_IM_CHANNEL) {
+  const value = (flag) => args[args.indexOf(flag) + 1];
+  if (!args.includes('--dry-run') || value('--channel') !== process.env.TEST_IM_CHANNEL || value('--account') !== (process.env.TEST_IM_ACCOUNT || 'main')) {
+    console.error('Wrong channel/account or unsafe notification'); process.exit(1);
+  }
+}
 if (args[0] === '--version') console.log('OpenClaw mock 1.0');
+else if (args[0] === 'channels' && args[1] === 'list') console.log(process.env.TEST_BROKEN_INVENTORY || JSON.stringify({ chat: { [process.env.TEST_IM_CHANNEL || 'feishu']: [process.env.TEST_IM_ACCOUNT || 'main'] } }));
 else if (args[0] === 'agents' && args[1] === 'list') console.log(JSON.stringify([{ id: 'builder' }]));
 else {
   if (args[0] === 'agent' && process.env.LOOP_CHECKPOINTS_DIR) {
@@ -236,6 +244,8 @@ const deliveredArgs = JSON.parse(await readFile(deliveryCapture, 'utf8'));
 for (const expected of ['message', 'send', '--channel', 'slack', '--target', 'channel:C123', '--account', 'work', '--reply-to', 'M456', 'async result']) {
   if (!deliveredArgs.includes(expected)) throw new Error(`notifier did not forward ${expected}`);
 }
+process.env.TEST_IM_CHANNEL = process.env.DIAGNOSTIC_TEST_CHANNEL || 'feishu';
+process.env.TEST_IM_ACCOUNT = 'diagnostic-account';
 const doctor = new URL('./openclaw-doctor.mjs', import.meta.url).pathname;
 const doctorResult = await new Promise((resolve) => {
   const child = spawn(process.execPath, [doctor, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -249,6 +259,98 @@ const doctorReport = JSON.parse(doctorResult.stdout);
 if (doctorReport.status !== 'ok' || doctorReport.externalWrite !== false || !doctorReport.checks.some((check) => check.id === 'notification_dry_run' && check.ok) || !doctorReport.checks.some((check) => check.id === 'human_gate_bridge_self_test' && check.ok)) throw new Error('doctor did not complete safe notification and Human Gate self-tests');
 if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('doctor notification forwarded a synthetic account');
 const smoke = new URL('./openclaw-smoke.mjs', import.meta.url).pathname;
+
+// Different executable, same reported version/inventory: never probe installed A
+// after discovering B, and never let smoke dispatch a worker after this failure.
+async function diagnosticRun(script, executable, extraEnv = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [script, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', executable, '--json'], { env: { ...process.env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+const alternate = path.join(root, 'alternate-openclaw.mjs');
+await writeFile(alternate, await readFile(mockOpenClaw));
+await chmod(alternate, 0o755);
+const deliveryBefore = await readFile(deliveryCapture, 'utf8');
+const mismatch = await diagnosticRun(doctor, alternate);
+assert.equal(mismatch.code, 1);
+assert.ok(JSON.parse(mismatch.stdout).failed.includes('diagnostic_runtime'));
+assert.ok(!JSON.parse(mismatch.stdout).checks.some((check) => check.id === 'notification_dry_run'));
+const mismatchSmoke = await diagnosticRun(smoke, alternate);
+assert.equal(mismatchSmoke.code, 1);
+assert.match(mismatchSmoke.stderr, /diagnostic_runtime/);
+assert.equal(await readFile(deliveryCapture, 'utf8'), deliveryBefore);
+assert.ok(!(await readdir(path.join(root, 'configs/loops/queues'))).some((name) => name.startsWith('smoke-')));
+// PATH and symlink aliases of the same runtime remain valid.
+const alias = path.join(root, 'alias-openclaw');
+await symlink(mockOpenClaw, alias);
+assert.equal((await diagnosticRun(doctor, alias)).code, 0);
+assert.equal((await diagnosticRun(doctor, path.basename(mockOpenClaw), { PATH: root + path.delimiter + process.env.PATH })).code, 0);
+// Conflicting inherited sources must never override any reported route.
+const callsFile = path.join(root, 'diagnostic-calls.jsonl');
+const staleEnv = {
+  LOOP_HUMAN_INPUT_SOURCE: JSON.stringify({ channel: 'feishu', account: 'stale', target: 'user:stale' }),
+  LOOP_NOTIFICATION_SOURCE: JSON.stringify({ channel: 'slack', account: 'stale', target: 'channel:stale' }),
+  DIAGNOSTIC_CALLS: callsFile
+};
+async function capturedCalls() {
+  return (await readFile(callsFile, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+function assertRoutes(calls, sources) {
+  const messages = calls.filter((call) => call.args[0] === 'message');
+  assert.equal(messages.length, sources.length);
+  messages.forEach(({ args }, index) => {
+    const value = (flag) => args[args.indexOf(flag) + 1];
+    assert.ok(args.includes('--dry-run'));
+    assert.equal(value('--channel'), sources[index].channel);
+    assert.equal(value('--account'), sources[index].account);
+    assert.equal(value('--target'), sources[index].target);
+  });
+}
+await writeFile(callsFile, '');
+const multi = await diagnosticRun(doctor, mockOpenClaw, { ...staleEnv, TEST_IM_CHANNEL: '', TEST_BROKEN_INVENTORY: JSON.stringify({ chat: { telegram: ['one', 'two'], slack: { accounts: ['team'] } } }) });
+assert.equal(multi.code, 0, multi.stderr);
+assertRoutes(await capturedCalls(), JSON.parse(multi.stdout).notificationSources);
+
+// A shared shell wrapper selects its profile from $0 (not realpath).
+// Even when the caller supplies the B alias, all probes must use installed A.
+const originalMock = await readFile(mockOpenClaw, 'utf8');
+const backingMock = path.join(root, 'backing-mock.mjs');
+await writeFile(backingMock, originalMock);
+try {
+  await writeFile(mockOpenClaw, `#!/bin/sh
+export TEST_INVOKED_AS="$0"
+case "$0" in *alias-openclaw) export TEST_IM_CHANNEL=telegram TEST_IM_ACCOUNT=profile-b ;; esac
+exec node "$(dirname "$0")/backing-mock.mjs" "$@"
+`);
+  await writeFile(callsFile, '');
+  const profiled = await diagnosticRun(doctor, alias, staleEnv);
+  assert.equal(profiled.code, 0, profiled.stderr);
+  const report = JSON.parse(profiled.stdout);
+  assert.equal(report.notificationSources[0].channel, process.env.TEST_IM_CHANNEL);
+  const calls = await capturedCalls();
+  assert.ok(calls.some((call) => call.args[0] === 'channels'));
+  assert.ok(calls.every((call) => call.invocation === mockOpenClaw));
+  assertRoutes(calls, report.notificationSources);
+} finally { await writeFile(mockOpenClaw, originalMock); }
+// A stale/tampered generated caller must fail even if manifest CLI matches.
+const notifierPath = path.join(root, 'scripts/loops/openclaw-loop-notify.mjs');
+const notifierOriginal = await readFile(notifierPath, 'utf8');
+try {
+  await writeFile(notifierPath, notifierOriginal.replace(JSON.stringify(mockOpenClaw), JSON.stringify(alternate)));
+  const drift = await diagnosticRun(doctor, mockOpenClaw);
+  assert.equal(drift.code, 1);
+  assert.ok(JSON.parse(drift.stdout).failed.includes('diagnostic_runtime'));
+} finally { await writeFile(notifierPath, notifierOriginal); }
+const brokenInventory = { TEST_BROKEN_INVENTORY: JSON.stringify({ chat: { [process.env.TEST_IM_CHANNEL]: ['diagnostic-account'], broken: { accounts: 'invalid' } } }) };
+const malformed = await diagnosticRun(doctor, mockOpenClaw, brokenInventory);
+assert.equal(malformed.code, 1);
+assert.ok(JSON.parse(malformed.stdout).failed.includes('notification_channels'));
+assert.equal((await diagnosticRun(smoke, mockOpenClaw, brokenInventory)).code, 1);
+
 const smokeSource = await readFile(smoke, 'utf8');
 if (!smokeSource.includes('Do not change user or project files, configuration, credentials, or external state.')
   || !smokeSource.includes('Writing the required Loop checkpoint and verification evidence under')
@@ -257,8 +359,9 @@ if (!smokeSource.includes('Do not change user or project files, configuration, c
   throw new Error('OpenClaw smoke permission boundary or checkpoint requirement is missing');
 }
 const loopBin = new URL('../bin/loop-engineering.mjs', import.meta.url).pathname;
+await writeFile(callsFile, '');
 const smokeResult = await new Promise((resolve) => {
-  const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [smoke, '--root', root, '--queue', 'test-tasks', '--worker-agent', 'builder', '--openclaw-bin', mockOpenClaw, '--loop-bin', loopBin, '--json'], { env: { ...process.env, ...staleEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = ''; let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -266,8 +369,13 @@ const smokeResult = await new Promise((resolve) => {
 });
 if (smokeResult.code !== 0) throw new Error(`smoke failed: ${smokeResult.stderr}`);
 const smokeReport = JSON.parse(smokeResult.stdout);
+assert.equal(smokeReport.notificationSource.channel, process.env.TEST_IM_CHANNEL);
+assert.equal(smokeReport.notificationSource.account, 'diagnostic-account');
+assertRoutes(await capturedCalls(), [smokeReport.notificationSource, smokeReport.notificationSource]);
 if (smokeReport.status !== 'ok' || smokeReport.externalWrite !== false || !smokeReport.steps.every((step) => step.ok)) throw new Error('end-to-end smoke did not pass safely');
 if (JSON.parse(await readFile(deliveryCapture, 'utf8')).includes('doctor')) throw new Error('smoke notification forwarded a synthetic account');
+delete process.env.TEST_IM_CHANNEL;
+delete process.env.TEST_IM_ACCOUNT;
 try { await readFile(path.join(root, `configs/loops/queues/${smokeReport.smokeQueue}.json`)); throw new Error('smoke config was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 try { await readFile(path.join(root, `runtime/loops/${smokeReport.smokeQueue}/state.json`)); throw new Error('smoke runtime was not cleaned'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 for (const generated of ['scripts/loops/openclaw-loop-dispatch.mjs', 'scripts/loops/openclaw-loop.mjs', 'scripts/loops/openclaw-loop-notify.mjs', 'scripts/loops/openclaw-loop-gate.mjs']) {

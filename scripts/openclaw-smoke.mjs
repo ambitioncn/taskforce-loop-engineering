@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { diagnosticEnvironment } from '../lib/openclaw-diagnostic-source.mjs';
 
 function parseArgs(argv) {
   const out = { root: process.cwd(), queue: 'agent-tasks', workerAgent: 'main', openclawBin: 'openclaw', loopBin: 'loop-engineering', json: false, keepArtifacts: false };
@@ -14,6 +15,12 @@ function parseArgs(argv) {
     else if (arg === '--openclaw-bin') out.openclawBin = argv[++i];
     else if (arg === '--loop-bin') out.loopBin = argv[++i];
     else if (arg === '--keep-artifacts') out.keepArtifacts = true;
+    else if (['--source-channel', '--source-account', '--source-target'].includes(arg)) {
+      const key = { '--source-channel': 'sourceChannel', '--source-account': 'sourceAccount', '--source-target': 'sourceTarget' }[arg];
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
+      out[key] = value;
+    }
     else if (arg === '--json') out.json = true;
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -23,7 +30,7 @@ function parseArgs(argv) {
 
 function run(command, args, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env || process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd: options.cwd, env: diagnosticEnvironment(options.env || process.env), stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -38,7 +45,7 @@ function safeId(value) { if (!/^[a-zA-Z0-9._-]+$/.test(value)) throw new Error('
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: loop-engineering-openclaw-smoke [--root workspace] [--queue agent-tasks] [--worker-agent main] [--openclaw-bin openclaw] [--loop-bin loop-engineering] [--keep-artifacts] [--json]');
+    console.log('Usage: loop-engineering-openclaw-smoke [--root workspace] [--queue agent-tasks] [--worker-agent main] [--openclaw-bin openclaw] [--loop-bin loop-engineering] [--keep-artifacts] [--source-channel channel] [--source-account account] [--source-target dry-run-target] [--json]');
     return;
   }
   safeId(args.queue);
@@ -51,10 +58,12 @@ async function main() {
   const steps = [];
   let taskId = null;
   try {
-    const doctor = await run(process.execPath, [doctorScript, '--root', args.root, '--queue', args.queue, '--worker-agent', args.workerAgent, '--openclaw-bin', args.openclawBin, '--json'], { cwd: args.root });
+    const doctor = await run(process.execPath, [doctorScript, '--root', args.root, '--queue', args.queue, '--worker-agent', args.workerAgent, '--openclaw-bin', args.openclawBin, ...['sourceChannel', 'sourceAccount', 'sourceTarget'].flatMap((key) => args[key] ? [{ sourceChannel: '--source-channel', sourceAccount: '--source-account', sourceTarget: '--source-target' }[key], args[key]] : []), '--json'], { cwd: args.root });
     steps.push({ id: 'doctor', ok: doctor.code === 0 });
     if (doctor.code !== 0) throw new Error(`doctor failed: ${doctor.stderr || doctor.stdout}`);
     const doctorReport = JSON.parse(doctor.stdout);
+    const source = doctorReport.notificationSources?.[0];
+    if (!source) throw new Error('doctor did not resolve a configured notification source');
     const gateSelfTestOk = doctorReport.checks?.some((check) => check.id === 'human_gate_bridge_self_test' && check.ok);
     steps.push({ id: 'human_gate_bridge_self_test', ok: gateSelfTestOk === true });
     if (!gateSelfTestOk) throw new Error('doctor did not verify the installed Human Gate bridge');
@@ -66,7 +75,7 @@ async function main() {
     await writeFile(smokeConfig, `${JSON.stringify(config, null, 2)}\n`);
     const smokeRuntimeRel = path.relative(args.root, smokeRuntime);
     const message = `走 loop：Perform a read-only integration smoke. Do not change user or project files, configuration, credentials, or external state. Writing the required Loop checkpoint and verification evidence under ${smokeRuntimeRel}/ is allowed and required; do not write anywhere else. Report SMOKE_OK with verification evidence.`;
-    const route = await run(args.loopBin, ['route-message', '--root', args.root, '--queue', smokeQueue, '--message', message, '--route', '--confirm-execute', '--source-channel', 'feishu', '--source-target', 'user:loop-smoke-dry-run', '--source-message-id', `smoke-${runToken}`, '--source-reply-to', `smoke-${runToken}`, '--json'], { cwd: args.root });
+    const route = await run(args.loopBin, ['route-message', '--root', args.root, '--queue', smokeQueue, '--message', message, '--route', '--confirm-execute', '--source-channel', source.channel, '--source-target', source.target, '--source-account', source.account, '--source-message-id', `smoke-${runToken}`, '--source-reply-to', `smoke-${runToken}`, '--json'], { cwd: args.root });
     steps.push({ id: 'route', ok: route.code === 0 });
     if (route.code !== 0) throw new Error(`route failed: ${route.stderr || route.stdout}`);
     const routed = JSON.parse(route.stdout);
@@ -89,7 +98,7 @@ async function main() {
     const terminalOk = terminalNotify.code === 0 && terminal?.sent === 1;
     steps.push({ id: 'terminal_dry_run_return', ok: terminalOk });
     if (!terminalOk) throw new Error(`terminal dry-run failed: ${terminalNotify.stderr || terminalNotify.stdout}`);
-    const report = { version: 1, status: 'ok', readOnlyTask: true, externalWrite: false, queue: args.queue, smokeQueue, workerAgent: args.workerAgent, taskId, steps, keptArtifacts: args.keepArtifacts };
+    const report = { version: 1, status: 'ok', readOnlyTask: true, externalWrite: false, queue: args.queue, smokeQueue, workerAgent: args.workerAgent, notificationSource: source, taskId, steps, keptArtifacts: args.keepArtifacts };
     console.log(args.json ? JSON.stringify(report, null, 2) : `OpenClaw Loop smoke: ok\ntask: ${taskId}\nexternal write: no\nartifacts: ${args.keepArtifacts ? smokeRuntime : 'cleaned'}`);
   } finally {
     if (!args.keepArtifacts) {

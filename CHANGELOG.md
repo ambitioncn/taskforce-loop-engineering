@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.16.2 - 2026-10-24
+
+- Discover OpenClaw diagnostic channel/account pairs from the selected CLI, with explicit source channel, account and target filters. Doctor covers all matching accounts; smoke covers one source per run.
+- Fail closed on malformed account inventories, missing installation records, executable mismatch and managed notifier/dispatcher drift.
+- Preserve the installed CLI invocation for profile-sensitive wrappers and isolate inherited human-input/notification sources in diagnostic subprocesses, preventing wrong-route false positives without changing production notification precedence.
+- Add Feishu, Telegram and Slack regression coverage with actual CLI/source/dry-run assertions; synchronize distributed skill instructions and acceptance boundaries. Dry-run diagnostics do not prove real message delivery, and publishing does not upgrade existing integrations.
+
 ## 0.16.1 - 2026-10-23
 
 - Restrict terminal-lock governance exemptions to accepted, gate-free later reviews. A `needs_human_acceptance` project label no longer hides current blockers or failed acceptance; protect ordinary retries and context recovery with terminal-checkpoint regressions through both core and installed mock dispatchers.
