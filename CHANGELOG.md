@@ -93,6 +93,7 @@ This release changes several behaviours on purpose; see `MIGRATING.md`.
 
 - Recover OpenClaw dispatcher launches rejected during Gateway restart drain by rotating the runtime session and requeueing the task.
 - Match only explicit restart-admission signatures on non-zero exits, leaving unrelated HTTP 503 responses and successful diagnostic text untouched.
+- Preserve task-scoped human-input gates during project reconciliation instead of canceling them as `project_not_found`.
 
 ## 0.15.18 - 2026-09-18
 

@@ -61,6 +61,41 @@ assert.equal(status.waiting, 0, 'B-01 waiting gate must disappear after B-01 lea
 assert.equal(status.canceled, 1);
 assert.equal(JSON.parse(await readFile(gateFile, 'utf8')).status, 'canceled');
 
+// A task-scoped human gate has no project id by design. Project reconciliation
+// must not reinterpret that absence as project_not_found and cancel the task.
+const taskScoped = await enqueueTask(root, {
+  queue,
+  title: 'Task-scoped external precondition',
+  task: 'Wait for a task-local external precondition',
+  sourceChannel: 'test',
+  sourceTarget: 'owner',
+  sourceAccount: 'main'
+});
+const taskScopedDir = path.join(taskRuntimeDirFor(root, queue, taskScoped.task.id), 'checkpoints');
+await mkdir(taskScopedDir, { recursive: true });
+await writeFile(path.join(taskScopedDir, 'cp1.json'), `${JSON.stringify({
+  version: 1,
+  task_id: taskScoped.task.id,
+  checkpoint_id: 'cp1',
+  status: 'blocked',
+  blockers: [{
+    action: 'Wait for task-local connectivity.',
+    required_authority: 'Owner confirms the external precondition is restored.',
+    authorization_state: 'missing',
+    needed_when: 'now',
+    materialize: true
+  }]
+}, null, 2)}\n`);
+const taskScopedNotice = await notifyHumanInputRequests(root, { queue, notifyCommand: '/bin/true' });
+const taskScopedResult = taskScopedNotice.results.find((item) => item.taskId === taskScoped.task.id);
+assert.equal(taskScopedResult.outcome, 'sent');
+const taskScopedGateFile = path.join(root, taskScopedResult.ledger);
+assert.equal(JSON.parse(await readFile(taskScopedGateFile, 'utf8')).project_id, null);
+await reconcileProjectGates(root, { queue });
+assert.equal(JSON.parse(await readFile(taskScopedGateFile, 'utf8')).status, 'waiting_for_human');
+assert.equal((await queueStatus(root, queue)).waiting, 1, 'task-scoped gate must remain waiting');
+await resolveHumanInput(root, { queue, gateId: `${taskScoped.task.id}:cp1`, input: 'task-local precondition restored' });
+
 const other = await enqueueTask(root, { queue, title: 'Other project task', task: 'Project other', projectId: 'other' });
 const openreel = await enqueueTask(root, { queue, title: 'OpenReel target', task: 'Project openreel', projectId: 'openreel' });
 await rename(path.join(root, other.file), path.join(root, 'runtime', 'loops', queue, 'active', path.basename(other.file)));
@@ -399,4 +434,4 @@ assert.equal(unboundResult.outcome, 'fail_closed');
 assert.equal(unboundResult.message, undefined);
 assert.equal((await queueStatus(root, queue)).waiting, 0);
 
-console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'future gate does not stop safe actionable backlog', 'conditional policy prose does not create a gate', 'authorized and consumed authority do not create gates', 'checkpoint-bound subproject backlog remains actionable', 'missing current authority creates a gate', 'standing-authorized production blocker does not create a gate', 'missing publication blocker creates a gate', 'accepted project optional deferred gate stays out of queue', 'unbound gate fails closed without actionable text'] }));
+console.log(JSON.stringify({ status: 'ok', assertions: ['standing project authorization reaches task contract', 'structured gate context', 'B-01 waiting to zero', 'task-scoped gate survives project reconciliation', 'project-isolated supersede', 'doctor strong validation', 'authoritative ledger drift', 'ready milestone deferred gate', 'future gate does not stop safe actionable backlog', 'conditional policy prose does not create a gate', 'authorized and consumed authority do not create gates', 'checkpoint-bound subproject backlog remains actionable', 'missing current authority creates a gate', 'standing-authorized production blocker does not create a gate', 'missing publication blocker creates a gate', 'accepted project optional deferred gate stays out of queue', 'unbound gate fails closed without actionable text'] }));

@@ -170,7 +170,7 @@ For OpenClaw workers, follow `references/context-budget.md` before long-running 
 
 ## Task vs Project Classification
 
-Classify scope before enqueueing.
+Classify scope before enqueueing. For scope inference, task-level gate reconciliation and effective acceptance reviews, follow [scope and task acceptance](references/scope-task-acceptance.md). Verify the generated contract against the original request; inference is heuristic, not authority.
 
 ### Scoped task
 
