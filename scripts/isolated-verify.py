@@ -165,7 +165,7 @@ def main():
         trace = evidence / "trace.log"
         output = evidence / "output"
         output.mkdir()
-        sandbox = [tools["bwrap"]["path"], "--die-with-parent", "--unshare-net",
+        sandbox = [tools["bwrap"]["path"], "--die-with-parent", "--unshare-user", "--unshare-net",
                    "--unshare-pid", "--unshare-ipc", "--unshare-uts",
                    "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
                    "--ro-bind", str(snapshot), "/work", "--bind", str(output), "/out",
