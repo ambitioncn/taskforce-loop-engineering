@@ -1103,6 +1103,10 @@ commands. It records the branch, worktree path, verification results, `git
 status --short`, `git diff --stat`, and `git diff --name-status` in the run
 artifact, plus untracked file names.
 
+On Linux, code queues can opt into frozen-input, fail-closed verification via
+`worktree.isolatedVerification`. See [isolated verification](docs/isolated-verification.md)
+for the input contract, host requirements, receipt rules, and limits.
+
 Create a starter config:
 
 ```bash
