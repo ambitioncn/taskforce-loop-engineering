@@ -27,7 +27,8 @@ await mkdir(pythonProject);
 await writeFile(path.join(pythonProject, 'input.txt'), 'hello\n');
 await writeFile(path.join(pythonProject, 'hidden.txt'), 'private\n');
 const python = await run(pythonProject, 'cat input.txt > /out/result.txt', ['input.txt'], 'python-pass');
-assert.equal(python.result.exitCode, 0, JSON.stringify(python.terminal));
+assert.equal(python.result.exitCode, 0, JSON.stringify(python.terminal) + '\n' +
+  (await readFile(path.join(base, 'python-pass', 'stderr.log'), 'utf8')).slice(0, 500));
 assert.equal(python.terminal.status, 'passed');
 assert.equal((await readFile(path.join(base, 'python-pass', 'output', 'result.txt'), 'utf8')).trim(), 'hello');
 
