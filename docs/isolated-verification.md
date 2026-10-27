@@ -23,7 +23,7 @@ with `/out` as their only persistent writable output. The environment has no
 inherited proxy, `NODE_OPTIONS`, home directory, or network access. The host
 must have `python3`, `bwrap`, and `strace`; no nonisolated fallback exists.
 
-`runtimeFiles` is an optional list of exact regular files under `/home` (for
+`runtimeFiles` is an optional list of exact regular files under `/home` or `/opt` (for
 example, a user-local Node binary). Each is mounted read-only at its original
 path and hashed before and after execution. System files under `/usr`, `/bin`,
 `/lib`, `/lib64`, and `/etc` are mounted read-only by the backend. Directory

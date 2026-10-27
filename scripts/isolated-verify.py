@@ -101,7 +101,7 @@ def trace_verdict(trace, declared, root, runtime_files):
                 written.add(relative)
             else:
                 violations.append("undeclared project read: " + relative)
-        elif (name.startswith("/home/") or name.startswith("/root/")) and name not in runtime_files:
+        elif (name.startswith("/home/") or name.startswith("/opt/") or name.startswith("/root/")) and name not in runtime_files:
             violations.append("undeclared home read: " + name)
     if pending:
         violations.append("unfinished open")
@@ -135,7 +135,7 @@ def main():
         runtime_files = {}
         for name in runtime_names:
             candidate = Path(name)
-            if (not name.startswith("/home/") or ".." in candidate.parts or
+            if (not name.startswith(("/home/", "/opt/")) or ".." in candidate.parts or
                     candidate.resolve() != candidate or not candidate.is_file() or
                     root == candidate or root in candidate.parents or evidence == candidate or evidence in candidate.parents):
                 raise ValueError("unsafe runtime file: " + name)
@@ -173,9 +173,11 @@ def main():
         for system in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
             if Path(system).exists():
                 sandbox += ["--ro-bind", system, system]
+        if any(name.startswith("/opt/") for name in runtime_files):
+            sandbox += ["--dir", "/opt"]
         for name in runtime_files:
             for parent in reversed(Path(name).parents):
-                if str(parent) not in ("/", "/home", "/usr", "/bin", "/lib", "/lib64", "/etc"):
+                if str(parent) not in ("/", "/home", "/opt", "/usr", "/bin", "/lib", "/lib64", "/etc"):
                     sandbox += ["--dir", str(parent)]
             sandbox += ["--ro-bind", name, name]
         sandbox += ["--", "/bin/sh", "-c", args.command]
