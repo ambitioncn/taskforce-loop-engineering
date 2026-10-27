@@ -13,6 +13,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 
 
 OPEN = re.compile(r"=\s+\d+<([^<>]+)(?:<[^>]+>)?>(?:\(deleted\))?\s*$")
@@ -24,6 +25,21 @@ def sha(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def living_process_group(group):
+    """Ignore reaped-but-uncollected zombies; they cannot execute or retain fds."""
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            fields = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            pgrp = int(fields[2])
+        except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
+            continue
+        if pgrp == group and fields[0] != "Z":
+            return True
+    return False
 
 
 def inventory(root, names):
@@ -195,12 +211,16 @@ def main():
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.wait()
-            try:
-                os.killpg(child.pid, 0)
-            except ProcessLookupError:
-                record["process_group_gone"] = True
-            else:
-                os.killpg(child.pid, signal.SIGKILL)
+            for _ in range(20):
+                if not living_process_group(child.pid):
+                    record["process_group_gone"] = True
+                    break
+                time.sleep(0.05)
+            if not record["process_group_gone"]:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    record["process_group_gone"] = True
         record["read_trace_verified"], record["read_violations"] = trace_verdict(trace, before, root, runtime_files)
         record["snapshot_unchanged"] = inventory(snapshot, names) == before
         record["source_unchanged"] = inventory(root, names) == before
