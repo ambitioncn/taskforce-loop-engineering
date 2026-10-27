@@ -52,6 +52,10 @@ node bin/loop-engineering.mjs --help
 
 Do not guess a workspace source path. Use `node packages/loop-engineering/bin/loop-engineering.mjs ...` only after confirming that exact path exists in the current workspace.
 
+### Verify the effective implementation
+
+A skill update does not upgrade the CLI or generated integration. Before relying on scope inference, task-gate reconciliation or isolated verification, inspect the installed package and wrapper imports against the exact implementation that provides the feature. A candidate may share a version label with an older published package. Keep PR source, merged source, published packages, installed CLI and live integration as separate states; do not infer deployment from a green CI run.
+
 ### OpenClaw Integration
 
 Installing the npm package exposes the CLI, but it does not automatically route conversations, select a worker agent, or create queue wrappers. First generate a read-only installation plan:
@@ -166,7 +170,7 @@ For OpenClaw workers, follow `references/context-budget.md` before long-running 
 
 ## Task vs Project Classification
 
-Classify scope before enqueueing.
+Classify scope before enqueueing. For scope inference, task-level gate reconciliation and effective acceptance reviews, follow [scope and task acceptance](references/scope-task-acceptance.md). Verify the generated contract against the original request; inference is heuristic, not authority.
 
 ### Scoped task
 
