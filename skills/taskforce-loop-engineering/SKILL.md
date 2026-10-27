@@ -52,6 +52,10 @@ node bin/loop-engineering.mjs --help
 
 Do not guess a workspace source path. Use `node packages/loop-engineering/bin/loop-engineering.mjs ...` only after confirming that exact path exists in the current workspace.
 
+### Verify the effective implementation
+
+A skill update does not upgrade the CLI or generated integration. Before relying on scope inference, task-gate reconciliation or isolated verification, inspect the installed package and wrapper imports against the exact implementation that provides the feature. A candidate may share a version label with an older published package. Keep PR source, merged source, published packages, installed CLI and live integration as separate states; do not infer deployment from a green CI run.
+
 ### OpenClaw Integration
 
 Installing the npm package exposes the CLI, but it does not automatically route conversations, select a worker agent, or create queue wrappers. First generate a read-only installation plan:
@@ -301,6 +305,8 @@ Default revision policy may stop after three rounds, two repeated goal signature
 
 For L2 code-changing tasks, prefer isolated worktrees. The runner prepares reviewable local changes and verification evidence; it does not implicitly commit, push, publish, deploy, merge, or delete branches.
 
+Before enabling or diagnosing this backend, follow [frozen-input verification](references/frozen-input-verification.md) for prerequisites, receipt checks and compatibility boundaries.
+
 For Linux code queues whose verification must not read the shared project tree, use the opt-in `worktree.isolatedVerification` backend described in [isolated verification](../../docs/isolated-verification.md). Declare the exact project inputs and any user-local runtime files before running the gate. Frozen project files preserve permission bits, which are included in input identity; mode-only changes invalidate stability. Failed undeclared file accesses remain failures from nested working directories even if the command swallows the error. Treat missing/failed receipts, undeclared reads, changed input digests between commands, or unsupported host isolation as `verify_failed`; a zero command exit alone is not acceptance evidence. This generic backend does not cover browser profiles, Docker/Git replay, networked checks, or undeclared dynamic dependencies. Keep those on a separately reviewed project-specific gate until explicitly enrolled and proven; do not silently fall back to ordinary `verifyCommands`.
 
 Safe review flow:
@@ -367,8 +373,3 @@ Before saying a loop is finished, verify:
 - Are evidence paths and next actions included?
 
 If any project requirement remains, report a phase/task result and continue with the next authorized item; do not claim the project or Loop is complete.
-
-When validating isolated verification, require host strace PID-namespace decoding
-(`--decode-pids=pidns`). Test optional absent access/exec probes against existing
-undeclared-file probes after chdir/fchdir and child creation. Include C-escaped
-non-ASCII, quote and backslash paths; unresolved/truncated paths must fail closed.
