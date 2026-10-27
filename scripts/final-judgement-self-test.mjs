@@ -9,6 +9,8 @@ assert.equal(inferTaskScope({ body: '继续同一整体项目，仅推进 T-01 �
 assert.equal(inferTaskScope({ body: 'Continue the project, only complete boundary item 2' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: '继续同一整体项目，取消团队功能并从项目完成门槛中移除，其他 backlog 不变' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Continue the overall project with a product-scope amendment: remove the team feature from the completion gate.' }), 'scoped_task');
+assert.equal(inferTaskScope({ body: '把外部证据列为项目级 deferred gates。本轮作为有界本地工程里程碑，完成 TECH-01030；不宣称整体项目完成。' }), 'scoped_task');
+assert.equal(inferTaskScope({ body: 'Project-level evidence remains deferred; this round is a bounded local engineering milestone.' }), 'scoped_task');
 
 {
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
