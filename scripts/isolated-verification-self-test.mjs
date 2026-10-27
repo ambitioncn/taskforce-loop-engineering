@@ -53,7 +53,7 @@ await writeFile(path.join(nodeProject, 'input.txt'), 'node\n');
 await writeFile(path.join(nodeProject, 'app.js'), 'require("fs").readFileSync("input.txt");\n');
 const nodeBinary = realpathSync(process.execPath);
 const node = await run(nodeProject, `${nodeBinary} app.js`,
-  ['input.txt', 'app.js'], 'node-pass', [nodeBinary]);
+  ['input.txt', 'app.js'], 'node-pass', nodeBinary.startsWith('/usr/') ? [] : [nodeBinary]);
 assert.equal(node.result.exitCode, 0);
 assert.equal(node.terminal.status, 'passed');
 assert.equal(node.terminal.read_trace_verified, true);

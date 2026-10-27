@@ -14,8 +14,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm install --ignore-scripts
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap strace
-      - run: npm test
+      - run: |
+          docker run --rm --privileged -v "$PWD:/src" -w /src "node:${{ matrix.node }}-bookworm" \
+            bash -lc 'apt-get update -qq && apt-get install -y -qq python3 bubblewrap strace git >/dev/null && npm test'
       - run: npm run check:adapters
       - run: npm run check:production-trust
       - run: npm run pack:dry
