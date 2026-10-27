@@ -301,6 +301,8 @@ Default revision policy may stop after three rounds, two repeated goal signature
 
 For L2 code-changing tasks, prefer isolated worktrees. The runner prepares reviewable local changes and verification evidence; it does not implicitly commit, push, publish, deploy, merge, or delete branches.
 
+For Linux code queues whose verification must not read the shared project tree, use the opt-in `worktree.isolatedVerification` backend described in [isolated verification](../../docs/isolated-verification.md). Declare the exact project inputs and any user-local runtime files before running the gate. Treat missing/failed receipts, undeclared reads, changed input digests between commands, or unsupported host isolation as `verify_failed`; a zero command exit alone is not acceptance evidence. This generic backend does not cover browser profiles, Docker/Git replay, networked checks, or undeclared dynamic dependencies. Keep those on a separately reviewed project-specific gate until explicitly enrolled and proven; do not silently fall back to ordinary `verifyCommands`.
+
 Safe review flow:
 
 ```bash
