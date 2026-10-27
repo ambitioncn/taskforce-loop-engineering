@@ -450,3 +450,326 @@ for (const status of ['blocked', 'revise']) {
   ];
   assert.deepEqual(selectEffectiveAcceptanceReviews({ checkpoints: [{ id: 'cp1' }] }, { reviews }).map(r => r.checkpointId), ['gate']);
 }
+
+for (const body of [
+  '完成完整项目，不要将本轮缩成有界本地里程碑',
+  'Complete the project-level objective, not a bounded milestone',
+  'Complete the project-level objective; do not reduce this round to a bounded local milestone',
+  "Complete the project-level objective; don't reduce it to a bounded milestone",
+  '完成完整项目；本轮不是有界本地里程碑',
+]) assert.equal(inferTaskScope({ body }), 'project', body);
+
+// Paired negation targets: a project prohibition must not negate a milestone.
+for (const body of [
+  '本轮做有界本地里程碑而不是完整项目',
+  'Implement a bounded milestone without completing the project-level objective',
+  'Not the project-level objective, but a bounded milestone',
+  '不是完整项目，而是本轮做有界本地里程碑',
+]) assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+for (const body of [
+  '完成完整项目，本轮不做有界本地里程碑',
+  '完成完整项目，本轮不应仅做有界本地里程碑',
+  'Complete the project-level objective without reducing it to a bounded milestone',
+  'Complete the project-level objective, never just a bounded milestone',
+]) assert.equal(inferTaskScope({ body }), 'project', body);
+
+// Unrelated prohibitions must not negate the requested object.
+for (const body of [
+  '在不部署完整项目的前提下本轮完成有界本地里程碑',
+  'Without deploying the project-level application implement a bounded milestone',
+  '完整项目不部署，本轮只完成第一步',
+  'Complete the project-level objective later; only complete a backlog item',
+]) assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+for (const body of [
+  '完成完整项目，不要只完成第一步',
+  'Complete the project-level objective, not merely a bounded milestone or backlog item',
+  '完成完整项目，不要仅推进第一步',
+  'Complete the project-level objective, not a backlog item',
+  '完成完整项目，不要取消功能',
+]) assert.equal(inferTaskScope({ body }), 'project', body);
+
+for (const body of [
+  '完整项目以后做，本轮完成有界可验收里程碑',
+  'Project-level delivery later, implement a bounded local/testable milestone',
+]) assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+
+// Ordinal modifiers and stopping verbs remain local to the negated object.
+for (const body of [
+  'Complete the project-level objective, not just the first bounded milestone',
+  'Complete the project-level objective, without stopping at a bounded milestone',
+  'Complete the project-level objective, do not stop at the first bounded milestone or backlog item',
+  'Complete the project-level objective, not only the next bounded milestone',
+]) assert.equal(inferTaskScope({ body }), 'project', body);
+for (const body of [
+  'Without deploying the project-level application implement the first bounded milestone',
+  'Do not stop the project-level service while implementing a bounded milestone',
+  'Project-level delivery later; stop at the first bounded milestone',
+  'Complete the first bounded milestone without stopping the project-level service',
+]) assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+
+// Negated object phrases accept modifiers, not a fixed adjective vocabulary.
+for (const modifier of ['initial', 'one', 'second', 'smallest useful', 'independently testable', 'newly requested']) {
+  for (const suffix of ['', ', or a backlog item', ', and a backlog item']) {
+    const body = `Complete the project-level objective, not merely ${modifier} bounded milestone${suffix}`;
+    assert.equal(inferTaskScope({ body }), 'project', body);
+  }
+  const body = `Project-level delivery later; implement ${modifier} bounded milestone`;
+  assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+}
+for (const body of [
+  '完成完整项目，不应停留在有界里程碑',
+  '完成完整项目，不应仅仅满足于一个有界本地里程碑',
+  'Complete the project-level objective, not a bounded milestone, or a backlog item',
+  'Do not reduce the project-level objective to a bounded milestone',
+  'Complete the project-level objective, not just the initial bounded milestone',
+]) assert.equal(inferTaskScope({ body }), 'project', body);
+for (const body of [
+  'Do not deploy, implement a bounded milestone for the project-level objective',
+  'Do not stop the service while implementing a bounded milestone for the project-level objective',
+  'Complete the project-level objective later, not today, implement a bounded milestone',
+  '完成完整项目之前，在不部署的前提下完成有界里程碑',
+  'Complete the project-level objective later, implement a bounded milestone, or a backlog item',
+]) assert.equal(inferTaskScope({ body }), 'scoped_task', body);
+
+// Independent boundary review: coordination, double negatives and context switches.
+for (const [body, expected] of [
+  [
+    "Complete the project-level objective, not a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, neither a bounded milestone nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not only a bounded milestone but also not merely a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not only a bounded milestone but also the entire delivery",
+    "project"
+  ],
+  [
+    "完成完整项目，不仅是有界里程碑，而且不是仅完成第一步",
+    "project"
+  ],
+  [
+    "完成完整项目，不做有界里程碑，也不只完成第一步",
+    "project"
+  ],
+  [
+    "Project-level delivery later; do not fail to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; do not avoid implementing a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "完整项目以后做，本轮不能不完成有界里程碑",
+    "scoped_task"
+  ],
+  [
+    "完整项目以后做，本轮不是不完成有界里程碑",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; implement a bounded milestone, not a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone; implement a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, and implement a backlog item",
+    "scoped_task"
+  ],
+  [
+    "完成完整项目，不做有界里程碑，改为只完成第一步",
+    "scoped_task"
+  ],
+  [
+    "Without deploying anything implement a bounded milestone for the project-level objective",
+    "scoped_task"
+  ],
+  [
+    "Do not deploy the service and then implement a bounded milestone for the project-level objective",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, never stop at a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, however implement a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, or a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone or a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, and a backlog item",
+    "project"
+  ],
+  [
+    "Project-level delivery later; implement a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; execute a bounded milestone",
+    "scoped_task"
+  ]
+]) assert.equal(inferTaskScope({ body }), expected, body);
+
+for (const [body, expected] of [
+  [
+    "Project-level delivery later; do not fail to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; don't fail to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; don’t fail to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; never fail to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; do not avoid complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Project-level delivery later; without failing to complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, neither a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, never stop at a bounded milestone, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and implement a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and complete a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and execute a bounded milestone",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, neither a backlog item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not a backlog item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, never stop at a backlog item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and implement a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and complete a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and execute a backlog item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, neither the boundary item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, not the boundary item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, never stop at the boundary item, nor a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and implement the boundary item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and complete the boundary item",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective later; not a bounded milestone, and execute the boundary item",
+    "scoped_task"
+  ],
+  [
+    "完整项目以后做，本轮不能不完成有界里程碑",
+    "scoped_task"
+  ],
+  [
+    "完整项目以后做，本轮不得不完成有界里程碑",
+    "scoped_task"
+  ],
+  [
+    "完整项目以后做，本轮不是不完成有界里程碑",
+    "scoped_task"
+  ],
+  [
+    "Complete not only a bounded milestone but also the entire project-level objective",
+    "project"
+  ],
+  [
+    "Not only avoid deployment but also implement a bounded milestone for the project-level objective",
+    "scoped_task"
+  ],
+  [
+    "本轮不仅完成有界里程碑，而且完成完整项目",
+    "project"
+  ],
+  [
+    "完整项目以后做，本轮不仅不部署，而且只完成第一步",
+    "scoped_task"
+  ],
+  [
+    "Complete the project-level objective, not a bounded milestone and not a backlog item",
+    "project"
+  ],
+  [
+    "Complete the project-level objective, neither a bounded milestone, nor a backlog item",
+    "project"
+  ]
+]) assert.equal(inferTaskScope({ body }), expected, body);
