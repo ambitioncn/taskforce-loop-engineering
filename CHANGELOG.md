@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.16.3 - 2026-10-27
+
+- Preserve task-scoped human-input gates during reconciliation; keep task acceptance distinct from project completion and unresolved authority blockers.
+- Improve English/Chinese scope inference for coordinated negation, neither/nor, double negatives and unrelated negative context, with paired bounded-task/project regressions. Scope inference remains heuristic.
+- Add opt-in Linux frozen-input verification using Python, bubblewrap and strace with PID-namespace decoding: declared inputs, preserved executable modes, host-owned traces and receipts, and no nonisolated fallback.
+- Audit failed path probes with raw traversal semantics, traced cwd/process inheritance and proven procfs self aliases. Unknown process/fd aliases and unresolved internal symlinks fail closed; this can reject legitimate optional accesses and is not unrestricted syscall emulation.
+- Publish updated repository skill references for scope/gates, isolated verification, runtime requirements and evidence boundaries. Publication does not upgrade existing CLI installations or generated integrations.
+
 ## 0.16.2 - 2026-10-24
 
 - Discover OpenClaw diagnostic channel/account pairs from the selected CLI, with explicit source channel, account and target filters. Doctor covers all matching accounts; smoke covers one source per run.
@@ -93,7 +101,6 @@ This release changes several behaviours on purpose; see `MIGRATING.md`.
 
 - Recover OpenClaw dispatcher launches rejected during Gateway restart drain by rotating the runtime session and requeueing the task.
 - Match only explicit restart-admission signatures on non-zero exits, leaving unrelated HTTP 503 responses and successful diagnostic text untouched.
-- Preserve task-scoped human-input gates during project reconciliation instead of canceling them as `project_not_found`.
 
 ## 0.15.18 - 2026-09-18
 

@@ -1,6 +1,6 @@
 {
   "name": "taskforce-loop-engineering",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "private": false,
   "description": "OpenClaw-native loop engineering CLI, templates, and skill for verifiable agent work loops.",
   "type": "module",
@@ -18,7 +18,8 @@
     "run-loop-cron.sh": "scripts/run-loop-cron.sh"
   },
   "scripts": {
-    "test": "npm run check:human-gates && npm run check && npm run check:competitive && npm run check:operator-workspace",
+    "test": "npm run check:isolation && npm run check:human-gates && npm run check && npm run check:competitive && npm run check:operator-workspace",
+    "check:isolation": "node --check lib/isolated-verification.mjs && python3 -c \"import ast; ast.parse(open('scripts/isolated-verify.py').read())\" && python3 scripts/isolated-verify-self-test.py && node scripts/isolated-verification-self-test.mjs",
     "check:operator-workspace": "node --check scripts/operator-workspace-final-judgement.mjs && node --check scripts/dashboard-autostart-install.mjs && node scripts/dashboard-autostart-self-test.mjs && node scripts/operator-workspace-final-judgement.mjs",
     "check:competitive": "node --check lib/transactional-state-kernel.mjs && node --check lib/goal-api.mjs && node scripts/competitive-acceptance.mjs",
     "check:adapters": "node --check lib/runtime-adapter-sdk.mjs && node scripts/runtime-adapter-conformance.mjs && node scripts/agent-team-control-plane-self-test.mjs",
@@ -41,7 +42,8 @@
     "./quota": "./lib/quota-runtime-decision.mjs",
     "./todo-control-plane": "./lib/todo-control-plane.mjs",
     "./human-gate-command": "./lib/human-gate-command.mjs",
-    "./human-gate-channel-adapter": "./lib/human-gate-channel-adapter.mjs"
+    "./human-gate-channel-adapter": "./lib/human-gate-channel-adapter.mjs",
+    "./isolated-verification": "./lib/isolated-verification.mjs"
   },
   "engines": {
     "node": ">=22"

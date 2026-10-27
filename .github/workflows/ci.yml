@@ -7,14 +7,16 @@ jobs:
     strategy:
       matrix:
         node: [22, 24]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
       - run: npm install --ignore-scripts
-      - run: npm test
+      - run: |
+          docker run --rm --init --privileged -v "$PWD:/src" -w /src "node:${{ matrix.node }}-bookworm" \
+            bash -lc 'apt-get update -qq && apt-get install -y -qq python3 bubblewrap strace git systemd >/dev/null && npm test'
       - run: npm run check:adapters
       - run: npm run check:production-trust
       - run: npm run pack:dry
