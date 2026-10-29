@@ -27,6 +27,9 @@ try {
     status: 'blocked', summary: 'Soak still running.', files_changed: ['soak.json'], verification: ['pending'], blockers: ['pending'], risks: [], project_completion: { status: 'in_progress' }
   });
   await writeJson(path.join(runtimeDir, 'final_judgement.json'), { version: 1, task_id: taskId, outcome: 'blocked' });
+  // Legacy judgements without coverage must be rebuilt once, then stay current.
+  assert.equal((await refreshTaskAcceptance(root, { queue, taskId })).outcome, 'refreshed');
+  assert.equal((await readJson(path.join(runtimeDir, 'final_judgement.json'))).coverage.planned_checkpoints, 1);
   assert.equal((await refreshTaskAcceptance(root, { queue, taskId })).outcome, 'already_current');
 
   await new Promise((resolve) => setTimeout(resolve, 20));

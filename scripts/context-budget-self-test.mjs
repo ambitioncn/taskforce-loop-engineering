@@ -24,7 +24,7 @@ assert.equal(dispatchFailureClassification({ exitCode: 1, stderr: 'Permission de
 
 const roots = [];
 try {
-  for (const scenario of ['yield', 'stale', 'malformed', 'missing-checkpoint', 'checkpoint-gate', 'pending-action', 'overflow', 'human-error', 'oversized', 'project-soft', 'project-hard', 'project-no-usage', 'terminal', 'pending-action-overflow', 'checkpoint-gate-overflow', 'stale-overflow', 'malformed-overflow', 'yield-overflow', 'yield-human-error', 'pending-action-failure']) {
+  for (const scenario of ['yield', 'repeat-yield', 'empty-yield', 'stale', 'malformed', 'missing-checkpoint', 'checkpoint-gate', 'pending-action', 'overflow', 'human-error', 'oversized', 'project-soft', 'project-hard', 'project-no-usage', 'terminal', 'pending-action-overflow', 'checkpoint-gate-overflow', 'stale-overflow', 'malformed-overflow', 'yield-overflow', 'yield-human-error', 'pending-action-failure']) {
     const root = await mkdtemp(path.join(tmpdir(), 'loop-context-'));
     roots.push(root);
     const worker = path.join(root, 'worker.mjs');
@@ -46,7 +46,7 @@ if (scenario.startsWith('project-') || scenario === 'terminal') {
   process.exit(0);
 }
 
-if (scenario !== 'missing-checkpoint') await writeFile(checkpoint, JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: e.LOOP_RUN_ID, status: scenario === 'checkpoint-gate' ? 'needs_human_input' : 'in_progress', summary: 'bounded progress', blockers: scenario === 'checkpoint-gate' ? ['Need approval'] : [], verification: [], risks: [], next_action: 'continue' }));
+if (scenario !== 'missing-checkpoint') await writeFile(checkpoint, JSON.stringify({ task_id: e.LOOP_TASK_ID, loop_run_id: e.LOOP_RUN_ID, checkpoint_id: e.LOOP_RUN_ID, status: scenario === 'checkpoint-gate' ? 'needs_human_input' : 'in_progress', summary: 'bounded progress', blockers: scenario === 'checkpoint-gate' ? ['Need approval'] : [], verification: scenario === 'empty-yield' ? [] : ['verified unit ' + (scenario === 'repeat-yield' ? 'same' : e.LOOP_SESSION_GENERATION)], risks: [], next_action: 'continue' }));
 const handoff = { version: 1, taskId: e.LOOP_TASK_ID, runId: scenario === 'stale' ? 'old-run' : e.LOOP_RUN_ID, generation: Number(e.LOOP_SESSION_GENERATION), attempt: Number(e.LOOP_ATTEMPT), reason: 'context_budget', checkpoint, summary: 'progress', completed: ['read source'], remaining: ['verify changes'], evidence: [checkpoint], nextAction: 'inspect test', authority: 'local only', pendingActions: scenario === 'pending-action' ? ['unknown payment outcome'] : [], blockers: [] };
 await writeFile(e.LOOP_CONTEXT_HANDOFF_FILE, scenario === 'malformed' ? '{' : scenario === 'oversized' ? ' '.repeat(17000) : JSON.stringify(handoff));
 if (original !== scenario) { console.error(original.endsWith('-human-error') ? 'Permission denied; context_length_exceeded' : original.endsWith('-failure') ? 'generic failure' : 'context_length_exceeded'); process.exitCode = 1; }
@@ -72,16 +72,34 @@ if (original !== scenario) { console.error(original.endsWith('-human-error') ? '
     } else if (scenario === 'terminal') {
       assert.equal(first.status, 'completed');
       assert.equal((await runQueueOnce(root, options)).processed, false, 'high token usage cannot replay completed work');
-    } else if (['yield', 'overflow', 'yield-overflow'].includes(scenario)) {
+    } else if (['yield', 'repeat-yield', 'overflow', 'yield-overflow'].includes(scenario)) {
       assert.equal(first.status, 'runtime_interrupted', scenario);
       const task = JSON.parse(await readFile(path.join(root, first.taskPath), 'utf8'));
       assert.equal(task.runtimeSessionGeneration, 1);
       assert.equal(task.sessionTickCount, 0);
       if (scenario === 'yield') assert.ok(task.contextHandoffFile);
-      const second = await runQueueOnce(root, options);
-      assert.equal(second.status, 'runtime_interrupted');
-      const third = await runQueueOnce(root, options);
-      assert.equal(third.status, 'runtime_blocked', 'recovery is bounded');
+      if (scenario === 'yield') {
+        // Normal progress can rotate beyond the exception budget, even with
+        // an already exhausted exception counter. It must not reset it either.
+        task.runtimeRecoveryCount = 2;
+        await writeFile(path.join(root, first.taskPath), JSON.stringify(task));
+        for (let tick = 0; tick < 4; tick++) {
+          const next = await runQueueOnce(root, options);
+          assert.equal(next.status, 'runtime_interrupted');
+          const saved = JSON.parse(await readFile(path.join(root, next.taskPath), 'utf8'));
+          assert.equal(saved.runtimeRecoveryCount, 2);
+          assert.equal(saved.contextHandoffCount, tick + 2);
+          assert.equal(saved.runtimeSessionGeneration, tick + 2);
+        }
+      } else if (scenario === 'repeat-yield') {
+        assert.equal((await runQueueOnce(root, options)).status, 'runtime_blocked');
+        assert.equal((await runQueueOnce(root, options)).processed, false);
+      } else {
+        const second = await runQueueOnce(root, options);
+        assert.equal(second.status, 'runtime_interrupted');
+        const third = await runQueueOnce(root, options);
+        assert.equal(third.status, 'runtime_blocked', 'exception recovery is bounded');
+      }
     } else if (['pending-action', 'checkpoint-gate', 'human-error', 'pending-action-overflow', 'checkpoint-gate-overflow', 'yield-human-error', 'pending-action-failure'].includes(scenario)) {
       assert.equal(first.status, 'needs_human_input', scenario);
       assert.equal((await runQueueOnce(root, options)).processed, false, 'blocked work cannot auto-replay');

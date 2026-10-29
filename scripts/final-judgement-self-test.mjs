@@ -1,16 +1,129 @@
 import assert from 'node:assert/strict';
-import { buildFinalJudgement, dispatchFailureClassification, inferTaskScope, selectEffectiveAcceptanceReviews } from '../lib/core.mjs';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { enqueueTask, queueRequeue, runQueueOnce, buildFinalJudgement, dispatchFailureClassification, inferTaskScope, refreshTaskAcceptance, selectEffectiveAcceptanceReviews, writeAcceptancePlan, writeDevPlan, writeTaskContract } from '../lib/core.mjs';
 
 const basePlan = { rubric: [], automation: [] };
 const baseContract = { task_id: 't1', risk_level: 'L1', requires_human_gate: false, task_scope: 'scoped_task' };
 
 assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标' }), 'project');
+assert.equal(inferTaskScope({ body: '承接项目并先开始首个批次', taskScope: 'project' }), 'project');
+assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标', taskScope: 'scoped_task' }), 'scoped_task');
+assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标', taskScope: 'invalid' }), 'project');
 assert.equal(inferTaskScope({ body: '继续同一整体项目，仅推进 T-01 第 2 项；阶段完成后不能称整体项目完成' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Continue the project, only complete boundary item 2' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: '继续同一整体项目，取消团队功能并从项目完成门槛中移除，其他 backlog 不变' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Continue the overall project with a product-scope amendment: remove the team feature from the completion gate.' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: '把外部证据列为项目级 deferred gates。本轮作为有界本地工程里程碑，完成 TECH-01030；不宣称整体项目完成。' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Project-level evidence remains deferred; this round is a bounded local engineering milestone.' }), 'scoped_task');
+
+for (const explicitScope of [true, false]) {
+  const root = await mkdtemp(path.join(tmpdir(), 'loop-project-plan-'));
+  try {
+    const task = {
+      id: 'project-scope-probe', title: 'First batch',
+      body: '开发完整项目并完成整体目标', queue: 'agent-tasks',
+      ...(explicitScope ? { taskScope: 'project' } : {}), projectId: 'probe', riskAssessment: 'model_assessed'
+    };
+    const dir = path.join(root, 'runtime/loops/agent-tasks/tasks', task.id);
+    await mkdir(path.join(dir, 'checkpoints'), { recursive: true });
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), '{}\n');
+    await writeFile(path.join(dir, 'task_contract.json'), JSON.stringify({
+      task_id: task.id, task_scope: 'project',
+      deliverables: ['preserved-project-deliverable'],
+      acceptance_summary: 'preserved-project-acceptance'
+    }));
+    await writeFile(path.join(dir, 'acceptance_plan.json'), JSON.stringify({
+      task_id: task.id,
+      generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1',
+      functional_checks: ['preserved-project-check'],
+      regression_checks: [], negative_tests: [], manual_review: [], automation: [], rubric: []
+    }));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({
+      task_id: task.id,
+      generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1',
+      approach: 'preserved-project-approach',
+      checkpoints: [{ id: 'cp1', goal: 'preserved milestone', output_file: 'checkpoints/cp1.json' }]
+    }));
+    const contract = await writeTaskContract(root, 'agent-tasks', task, {
+      projectAuthorization: { project: 'probe', source: 'test',
+        production_authorized: false, paid_action_authorized: false }
+    });
+    const acceptance = await writeAcceptancePlan(root, 'agent-tasks', task, contract);
+    const dev = await writeDevPlan(root, 'agent-tasks', task, contract, acceptance);
+    assert.equal(contract.contract.task_scope, 'project');
+    assert.deepEqual(contract.contract.deliverables, ['preserved-project-deliverable']);
+    assert.deepEqual(acceptance.plan.functional_checks, ['preserved-project-check']);
+    assert.deepEqual(dev.plan.checkpoints.map((entry) => entry.id), ['cp1']);
+    assert.equal(dev.plan.approach, 'preserved-project-approach');
+    assert.equal(dev.plan.checkpoint_schema.checkpoint_id, 'cp2');
+    const acceptedReviews = { reviews: [{ checkpointId: 'cp1', sequence: 1, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed' }).outcome, 'project_in_progress');
+    const noProgress = buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 1 });
+    assert.equal(noProgress.outcome, 'needs_revision');
+    assert.equal(noProgress.no_progress_continuation, true);
+    assert.match(noProgress.reasons[0], /no new committed and accepted milestone/);
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 0 }).outcome, 'project_in_progress');
+
+    const repairedPlan = { checkpoints: [{ id: 'cp1' }, { id: 'cp2' }] };
+    const repairedReviews = { reviews: [
+      { checkpointId: 'cp1', sequence: 1, status: 'accepted' },
+      { checkpointId: 'cp2', sequence: 2, status: 'revise' },
+      { checkpointId: 'cp3', milestoneId: 'cp2', sequence: 3, status: 'accepted', projectCompletion: { status: 'in_progress' } }
+    ] };
+    const repairContext = { dispatchStatus: 'completed', priorCheckpointCount: 2, priorPlannedCheckpointCount: 2, priorAcceptedMilestoneIds: ['cp1'] };
+    assert.equal(buildFinalJudgement(contract.contract, basePlan, repairedPlan, { count: 3 }, repairedReviews, repairContext).outcome, 'project_in_progress');
+    // Re-emitting already accepted work is not progress, even with a new file.
+    assert.equal(buildFinalJudgement(contract.contract, basePlan, repairedPlan, { count: 3 }, repairedReviews, { ...repairContext, priorAcceptedMilestoneIds: ['cp1', 'cp2'] }).outcome, 'needs_revision');
+    // In-place repair also advances acceptance without increasing file count.
+    assert.equal(buildFinalJudgement(contract.contract, basePlan, repairedPlan, { count: 2 }, repairedReviews, repairContext).outcome, 'project_in_progress');
+    const completedReviews = { reviews: [{ checkpointId: 'cp1', sequence: 1, status: 'accepted', projectCompletion: { status: 'accepted' } }] };
+    assert.notEqual(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, completedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 1 }).outcome, 'needs_revision');
+    const committedMissing = { ...dev.plan, checkpoints: [...dev.plan.checkpoints, { id: 'cp2', goal: 'specific committed batch', output_file: 'checkpoints/cp2.json' }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, committedMissing, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed' }).outcome, 'needs_revision');
+    const accepted170 = Array.from({ length: 170 }, (_, index) => ({ id: `cp${index + 1}`, goal: `bounded batch ${index + 1}` }));
+    const reviews170 = { reviews: accepted170.map((entry, index) => ({ checkpointId: entry.id, sequence: index + 1, status: 'accepted', projectCompletion: { status: 'in_progress' } })) };
+    const exact170 = { ...dev.plan, checkpoints: accepted170 };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 170 }, reviews170, { dispatchStatus: 'completed' }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 170 }, reviews170, { dispatchStatus: 'completed', priorCheckpointCount: 170 }).outcome, 'needs_revision');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 171 }, reviews170, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 170, priorAcceptedMilestoneIds: accepted170.map(cp => cp.id) }).outcome, 'needs_revision');
+    const progressed171 = { ...exact170, checkpoints: [...accepted170, { id: 'cp171', goal: 'selected batch' }] };
+    const accepted171 = { reviews: [...reviews170.reviews, { checkpointId: 'cp171', sequence: 171, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 170 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 171 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, { ...exact170, checkpoints: [...accepted170, { id: 'cp171', goal: 'unexecuted placeholder' }] }, { count: 170 }, reviews170, { dispatchStatus: 'completed' }).outcome, 'needs_revision');
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), JSON.stringify({
+      task_id: task.id, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Accepted local slice',
+      files_changed: [], verification: ['focused test passed'], blockers: [], risks: [],
+      project_completion: { status: 'in_progress' }
+    }));
+    await mkdir(path.join(root, 'runtime/loops/agent-tasks/failed'), { recursive: true });
+    await writeFile(path.join(root, 'runtime/loops/agent-tasks/failed', `${task.id}.json`), JSON.stringify({ ...task, status: 'needs_revision' }));
+    await writeFile(path.join(dir, 'final_judgement.json'), JSON.stringify(noProgress));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify(dev.plan));
+    const newer = new Date(Date.now() + 2000);
+    await utimes(path.join(dir, 'dev_plan.json'), newer, newer);
+    const refreshed = await refreshTaskAcceptance(root, { queue: 'agent-tasks', taskId: task.id });
+    assert.equal(refreshed.status, 'needs_revision');
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'final_judgement.json'), 'utf8')).no_progress_continuation, true);
+    await writeFile(path.join(dir, 'checkpoints/cp2.json'), JSON.stringify({
+      task_id: task.id, checkpoint_id: 'cp2', status: 'ready_for_acceptance', summary: 'Selected next batch',
+      files_changed: [], verification: ['next batch test passed'], blockers: [], risks: [],
+      project_completion: { status: 'in_progress' }
+    }));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({
+      ...dev.plan, checkpoints: [...dev.plan.checkpoints, { id: 'cp2', goal: 'Selected next batch', output_file: 'checkpoints/cp2.json' }]
+    }));
+    const latest = new Date(Date.now() + 4000);
+    await utimes(path.join(dir, 'dev_plan.json'), latest, latest);
+    const resumed = await refreshTaskAcceptance(root, { queue: 'agent-tasks', taskId: task.id });
+    assert.equal(resumed.status, 'project_in_progress');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 {
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
@@ -773,3 +886,132 @@ for (const [body, expected] of [
     "project"
   ]
 ]) assert.equal(inferTaskScope({ body }), expected, body);
+
+// Plan labels cannot transfer accepted evidence to a different milestone.
+for (const oldAccepted of [['cp1'], []]) {
+  for (const renamedId of ['cp1-renamed', 'cp1-renamed-again', 'cp1-third-name']) {
+    const result = buildFinalJudgement(
+      { ...baseContract, task_scope: 'project' }, basePlan,
+      { checkpoints: [{ id: renamedId }] }, { count: 1 },
+      { reviews: [{ checkpointId: 'cp1', milestoneId: 'cp1', sequence: 1, status: 'accepted', projectCompletion: { status: 'in_progress' } }] },
+      { dispatchStatus: 'completed', priorCheckpointCount: 1, priorAcceptedMilestoneIds: oldAccepted }
+    );
+    assert.equal(result.outcome, 'needs_revision', 'plan-only rename: ' + renamedId);
+    assert.equal(result.no_progress_continuation, true);
+  }
+}
+
+// A real queue must stop the renaming worker and never replay it on later ticks.
+{
+  const root = await mkdtemp(path.join(tmpdir(), 'loop-rename-queue-'));
+  try {
+    const { task } = await enqueueTask(root, { queue: 'probe', title: 'rename-only', task: '开发完整项目并完成整体目标' });
+    const dir = path.join(root, 'runtime/loops/probe/tasks', task.id);
+    await mkdir(path.join(dir, 'checkpoints'), { recursive: true });
+    const cp = JSON.stringify({ task_id: task.id, checkpoint_id: 'cp1', milestone_id: 'cp1', sequence: 1, status: 'ready_for_acceptance', summary: 'Accepted local work', verification: ['passed'], blockers: [], risks: [], project_completion: { status: 'in_progress' } });
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), cp);
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({ task_id: task.id, generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1', checkpoints: [{ id: 'cp1' }] }));
+    await writeFile(path.join(dir, 'acceptance_plan.json'), JSON.stringify({ task_id: task.id, generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1', functional_checks: [], regression_checks: [], negative_tests: [], edge_cases: [], manual_review: [], automation: [], rubric: [] }));
+    const worker = path.join(root, 'worker.mjs');
+    await writeFile(worker, `import { readFile, writeFile, appendFile } from 'node:fs/promises';
+const file = ${JSON.stringify(path.join(dir, 'dev_plan.json'))};
+const p = JSON.parse(await readFile(file, 'utf8')); p.checkpoints[0].id += '-renamed';
+await writeFile(file, JSON.stringify(p));
+await appendFile(${JSON.stringify(path.join(root, 'dispatches'))}, 'dispatch\\n');`);
+    const options = { queue: 'probe', dispatcher: `node '${worker}'`, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    assert.equal((await runQueueOnce(root, options)).run.finalJudgement.outcome, 'needs_revision');
+    for (let tick = 0; tick < 3; tick++) assert.equal((await runQueueOnce(root, options)).processed, false);
+    assert.equal(await readFile(path.join(root, 'dispatches'), 'utf8'), 'dispatch\n');
+    assert.equal(await readFile(path.join(dir, 'checkpoints/cp1.json'), 'utf8'), cp);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// Exercise the dispatch-time baseline through real disposable queue runs.
+for (const plannedCount of [1, 2]) for (const scenario of ['repair', 'in-place', 'duplicate', 'empty', 'blocked']) {
+  const root = await mkdtemp(path.join(tmpdir(), 'loop-progress-queue-'));
+  try {
+    const { task } = await enqueueTask(root, { queue: 'probe', title: scenario, task: '开发完整项目并完成整体目标' });
+    const dir = path.join(root, 'runtime/loops/probe/tasks', task.id);
+    await mkdir(path.join(dir, 'checkpoints'), { recursive: true });
+    const checkpoint = (id, sequence, status) => ({ task_id: task.id, checkpoint_id: id, milestone_id: id, sequence, status, summary: 'Local validation', files_changed: [], verification: ['passed'], blockers: [], risks: [], project_completion: { status: 'in_progress' } });
+    if (plannedCount === 2) await writeFile(path.join(dir, 'checkpoints/cp1.json'), JSON.stringify(checkpoint('cp1', 1, 'ready_for_acceptance')));
+    await writeFile(path.join(dir, 'checkpoints/cp2.json'), JSON.stringify(checkpoint('cp2', 2, ['repair', 'in-place', 'blocked'].includes(scenario) ? 'in_progress' : 'ready_for_acceptance')));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({ task_id: task.id, generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1', checkpoints: plannedCount === 2 ? [{ id: 'cp1' }, { id: 'cp2' }] : [{ id: 'cp2' }] }));
+    await writeFile(path.join(dir, 'acceptance_plan.json'), JSON.stringify({ task_id: task.id, generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1', functional_checks: [], regression_checks: [], negative_tests: [], edge_cases: [], manual_review: [], automation: [], rubric: [] }));
+    const worker = path.join(root, 'worker.mjs');
+    const cp = { ...checkpoint(scenario === 'in-place' ? 'cp2' : 'cp3', 3, scenario === 'blocked' ? 'blocked' : 'ready_for_acceptance'), milestone_id: 'cp2', revises_checkpoint_id: 'cp2', blockers: scenario === 'blocked' ? ['Need human approval'] : [] };
+    await writeFile(worker, `import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+if (${JSON.stringify(scenario)} !== 'empty') await writeFile(path.join(process.env.LOOP_CHECKPOINTS_DIR, ${JSON.stringify(cp.checkpoint_id + '.json')}), ${JSON.stringify(JSON.stringify(cp))});`);
+    const options = { queue: 'probe', dispatcher: `node '${worker}'`, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const result = await runQueueOnce(root, options);
+    const expected = ['repair', 'in-place'].includes(scenario) ? 'project_in_progress' : scenario === 'blocked' ? 'blocked' : 'needs_revision';
+    assert.equal(result.run.finalJudgement.outcome, expected, scenario + JSON.stringify(result.run.finalJudgement));
+    if (expected === 'project_in_progress') {
+      const second = await runQueueOnce(root, options);
+      assert.equal(second.run.finalJudgement.outcome, 'needs_revision', 'repeated accepted milestone must stop');
+    } else {
+      assert.equal((await runQueueOnce(root, options)).processed, false, 'no automatic replay');
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+console.log('project continuation queue regressions passed');
+
+// Invalid history is an unknown baseline, not empty accepted coverage. Permit
+// one repairing dispatch, then stop for explicit revision even if it repairs.
+for (const scenario of ['repair', 'unchanged', 'new-terminal', 'blocked', 'invalid-shape', 'shape-unchanged']) {
+  const root = await mkdtemp(path.join(tmpdir(), 'loop-invalid-baseline-'));
+  try {
+    const { task } = await enqueueTask(root, { queue: 'probe', title: scenario, task: '开发完整项目并完成整体目标' });
+    const dir = path.join(root, 'runtime/loops/probe/tasks', task.id);
+    await mkdir(path.join(dir, 'checkpoints'), { recursive: true });
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), ['invalid-shape', 'shape-unchanged'].includes(scenario) ? 'null' : '{');
+    const cp = { task_id: task.id, checkpoint_id: 'cp1', milestone_id: 'cp1', status: scenario === 'blocked' ? 'blocked' : 'ready_for_acceptance', summary: 'Repair', verification: ['passed'], blockers: scenario === 'blocked' ? ['Need human approval'] : [], risks: [], project_completion: { status: 'in_progress' } };
+    const worker = path.join(root, 'worker.mjs');
+    const marker = path.join(root, 'worker-ran');
+    await writeFile(worker, `import { writeFile } from 'node:fs/promises';
+await writeFile(${JSON.stringify(marker)}, 'yes');
+${['repair', 'blocked', 'invalid-shape'].includes(scenario) ? `await writeFile(${JSON.stringify(path.join(dir, 'checkpoints/cp1.json'))}, ${JSON.stringify(JSON.stringify(cp))});` : ''}
+${scenario === 'new-terminal' ? `await writeFile(${JSON.stringify(path.join(dir, 'checkpoints/cp2.json'))}, ${JSON.stringify(JSON.stringify({ ...cp, checkpoint_id: 'cp2', sequence: 99, project_completion: { status: 'accepted' } }))});` : ''}`);
+    // A consumed authorization is still not satisfied by unknown history, even
+    // with an apparently valid successor beside the corrupt record.
+    const gateFile = path.join(root, 'runtime/loops/probe/human-input/gates/consumed.json');
+    const gate = { task_id: task.id, checkpoint_id: 'cp1', status: 'consumed', authorization: { state: 'consumed' } };
+    await mkdir(path.dirname(gateFile), { recursive: true });
+    await writeFile(gateFile, JSON.stringify(gate));
+    const preserveGate = ['unchanged', 'new-terminal', 'shape-unchanged'].includes(scenario);
+    if (preserveGate) await writeFile(path.join(dir, 'checkpoints/successor.json'), JSON.stringify({ ...cp, checkpoint_id: 'cp-successor', revises_checkpoint_id: 'cp1', sequence: 2 }));
+    const options = { queue: 'probe', dispatcher: `node '${worker}'`, checkpointPollMs: 0, progressHeartbeatMs: 0 };
+    const result = await runQueueOnce(root, options);
+    if (preserveGate) assert.deepEqual(JSON.parse(await readFile(gateFile, 'utf8')), gate, 'corrupt history must preserve consumed gate byte semantics');
+    assert.equal(await readFile(marker, 'utf8'), 'yes', scenario + ': repair worker launches');
+    if (result.run.finalJudgement.outcome !== (scenario === 'blocked' ? 'blocked' : 'needs_revision')) console.error(JSON.stringify(result.run));
+    assert.equal(result.run.finalJudgement.outcome, scenario === 'blocked' ? 'blocked' : 'needs_revision', scenario);
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'final_judgement.json'), 'utf8')).invalid_checkpoint_baseline, true, scenario);
+    assert.equal((await runQueueOnce(root, options)).processed, false, 'invalid baseline must not replay');
+    await refreshTaskAcceptance(root, { queue: 'probe', taskId: task.id });
+    const refreshed = JSON.parse(await readFile(path.join(dir, 'final_judgement.json'), 'utf8'));
+    assert.equal(refreshed.outcome, scenario === 'blocked' ? 'blocked' : 'needs_revision', 'refresh retains unknown baseline');
+    if (preserveGate) assert.deepEqual(JSON.parse(await readFile(gateFile, 'utf8')), gate, 'refresh must preserve consumed gate');
+    if (scenario === 'repair') {
+      // Explicit operator revision only after validated history: do not erase
+      // the marker by refresh or count repairing JSON as new milestone work.
+      await queueRequeue(root, 'probe', task.id, { from: 'failed' });
+      const terminal = { ...cp, checkpoint_id: 'cp2', revises_checkpoint_id: 'cp1', sequence: 2, summary: 'New verified terminal revision', project_completion: { status: 'accepted' } };
+      await writeFile(worker, `import { writeFile } from 'node:fs/promises'; await writeFile(${JSON.stringify(path.join(dir, 'checkpoints/cp2.json'))}, ${JSON.stringify(JSON.stringify(terminal))});`);
+      const revised = await runQueueOnce(root, options);
+      const contract = JSON.parse(await readFile(path.join(dir, 'task_contract.json'), 'utf8'));
+      assert.equal(revised.run.finalJudgement.outcome, contract.requires_human_gate ? 'ready_for_human_review' : 'ready_to_apply', 'explicit revision restores acceptance without bypassing contract gate: ' + JSON.stringify({ judgement: revised.run.finalJudgement, plan: JSON.parse(await readFile(path.join(dir, 'dev_plan.json'), 'utf8')).checkpoints }));
+      assert.equal(JSON.parse(await readFile(path.join(dir, 'final_judgement.json'), 'utf8')).invalid_checkpoint_baseline, false);
+      assert.equal(JSON.parse(await readFile(gateFile, 'utf8')).status, 'satisfied', 'valid successor can satisfy consumed gate after repair');
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+console.log('invalid baseline controlled repair regressions passed');
+
+// Durable phase closure protocol and conservative negative cases.
+await import('./revision-coverage-self-test.mjs');

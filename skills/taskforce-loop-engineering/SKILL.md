@@ -189,6 +189,8 @@ For a project-level objective:
 5. Continue through implementation, verification, revisions, and the next actionable backlog item within the authorized safety boundary.
 6. Stop only when total project acceptance passes, or a genuine human authorization/product decision/external-state blocker prevents meaningful progress.
 
+For project continuations (explicit or inferred scope), preserve worker-authored plans and reread durable plans after dispatch. Progress means a committed milestone newly passes acceptance, including repairing an existing failed milestone; extra checkpoint files or re-emitting accepted milestones do not count. Accepted progress must match durable checkpoint/milestone identity even for a single planned milestone; changing only the plan ID cannot transfer old acceptance to new work. A no-progress continuation stops for revision instead of requeueing. Acceptance refresh re-evaluates changed plans and rebuilds legacy judgements missing coverage once.
+
 Never silently narrow a complete-project request into “first milestone” and call that the Loop complete. A single queue task or milestone may be complete while the project remains active.
 
 Recommended commands:
@@ -373,3 +375,18 @@ Before saying a loop is finished, verify:
 - Are evidence paths and next actions included?
 
 If any project requirement remains, report a phase/task result and continue with the next authorized item; do not claim the project or Loop is complete.
+
+### Invalid checkpoint baseline repair
+
+Pre-dispatch review treats malformed JSON and non-object checkpoint roots as explicit invalid evidence, not empty accepted coverage. A bounded worker may repair the local record, but an unknown dispatch baseline is persisted as `invalid_checkpoint_baseline` and prevents automatic acceptance/continuation, including after acceptance refresh. Repair success is not proof of new milestone progress: use an explicit revision from validated history. Unrepaired invalid evidence cannot be superseded by a terminal snapshot. Human blockers take precedence; gate reconciliation leaves all gates unchanged while any checkpoint is invalid. Filesystem/permission failures are not classified as repairable JSON corruption. This conservative path may require an additional explicit revision even after a successful repair; it must not replay automatically.
+
+### Normal context handoff versus runtime recovery
+
+A valid successful handoff with nonempty, previously unseen checkpoint verification rotates the session without consuming or resetting runtimeRecoveryCount. Repeated verification (even with renamed checkpoints/new run IDs), empty verification and invalid handoffs stop; unresolved authority or external outcomes remain human blockers. Exception recovery remains capped independently. Verification fingerprints are cooperative progress evidence, not independent semantic proof: final task acceptance is still required. Keep checkpoint verification concrete and tied to the completed unit. When hotfixing an installed runner under explicit authority, stage/test the narrow patch separately, back up originals, and note existing processes retain already imported modules.
+
+
+### Explicit closure of unordered phase checkpoints
+
+New checkpoints must carry stable `task_id`/`milestone_id`, a monotonic `sequence` and checkpoint-owned `created_at`; do not invent clocks for historical records. `revises_checkpoint_id` is lineage only, not proof that every older snapshot is resolved. A final accepted checkpoint can close unordered, status-only `in_progress` records with `revision_coverage`: one entry per old record containing `checkpoint_id`, SHA-256 of the exact checkpoint bytes in `checkpoint_sha256`, a concrete `resolution`, and nonempty `verification` strings also present in the final checkpoint's verification array. Same-task and same-planned-milestone identity must match. Preserve historical files.
+
+Coverage cannot close real failed checks, missing evidence, corruption, duplicate identities, human blockers or deferred gates. A phase that itself declares revision coverage is not a plain status-only target: its invalid declaration cannot be laundered away by a later coverage edge. Invalid coverage remains a revision failure even if clocks otherwise order the records. Uncovered unordered history remains effective. Different explicit milestone identities never supersede each other by time alone; legacy unlabelled single-plan chronology remains supported. Evidence references are cooperative claims, not independent proof of test execution: review the actual artifacts before emitting final coverage.

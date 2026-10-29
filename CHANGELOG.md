@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.16.4 - 2026-10-29
+
+- Measure project continuation by newly accepted, evidence-bound milestone identities, preserving explicit and inferred project plans; renamed plans and duplicate snapshots no longer count as progress.
+- Allow bounded repair of malformed checkpoint history without treating unknown baselines as empty acceptance. Preserve human gates and require an explicit validated revision before continuation.
+- Separate successful evidence-bearing context handoffs from capped exception recovery; repeated or empty verification still stops and human blockers remain authoritative.
+- Close unordered status-only phases with explicit same-scope, hash-bound revision coverage. Preserve history, real defects, corrupt evidence and cross-milestone boundaries; reject invalid coverage laundering.
+- Add Node 22/24 regression coverage and synchronize the distributed skill. Publication does not upgrade installed CLIs or integrations.
+
 ## 0.16.3 - 2026-10-27
 
 - Preserve task-scoped human-input gates during reconciliation; keep task acceptance distinct from project completion and unresolved authority blockers.
