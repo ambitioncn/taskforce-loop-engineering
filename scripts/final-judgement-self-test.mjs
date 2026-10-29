@@ -1,16 +1,116 @@
 import assert from 'node:assert/strict';
-import { buildFinalJudgement, dispatchFailureClassification, inferTaskScope, selectEffectiveAcceptanceReviews } from '../lib/core.mjs';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { buildFinalJudgement, dispatchFailureClassification, inferTaskScope, refreshTaskAcceptance, selectEffectiveAcceptanceReviews, writeAcceptancePlan, writeDevPlan, writeTaskContract } from '../lib/core.mjs';
 
 const basePlan = { rubric: [], automation: [] };
 const baseContract = { task_id: 't1', risk_level: 'L1', requires_human_gate: false, task_scope: 'scoped_task' };
 
 assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标' }), 'project');
+assert.equal(inferTaskScope({ body: '承接项目并先开始首个批次', taskScope: 'project' }), 'project');
+assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标', taskScope: 'scoped_task' }), 'scoped_task');
+assert.equal(inferTaskScope({ body: '开发完整项目并完成整体目标', taskScope: 'invalid' }), 'project');
 assert.equal(inferTaskScope({ body: '继续同一整体项目，仅推进 T-01 第 2 项；阶段完成后不能称整体项目完成' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Continue the project, only complete boundary item 2' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: '继续同一整体项目，取消团队功能并从项目完成门槛中移除，其他 backlog 不变' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Continue the overall project with a product-scope amendment: remove the team feature from the completion gate.' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: '把外部证据列为项目级 deferred gates。本轮作为有界本地工程里程碑，完成 TECH-01030；不宣称整体项目完成。' }), 'scoped_task');
 assert.equal(inferTaskScope({ body: 'Project-level evidence remains deferred; this round is a bounded local engineering milestone.' }), 'scoped_task');
+
+{
+  const root = await mkdtemp(path.join(tmpdir(), 'loop-project-plan-'));
+  try {
+    const task = {
+      id: 'project-scope-probe', title: 'First batch',
+      body: '承接项目并先开始首个批次', queue: 'agent-tasks',
+      taskScope: 'project', projectId: 'probe', riskAssessment: 'model_assessed'
+    };
+    const dir = path.join(root, 'runtime/loops/agent-tasks/tasks', task.id);
+    await mkdir(path.join(dir, 'checkpoints'), { recursive: true });
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), '{}\n');
+    await writeFile(path.join(dir, 'task_contract.json'), JSON.stringify({
+      task_id: task.id, task_scope: 'project',
+      deliverables: ['preserved-project-deliverable'],
+      acceptance_summary: 'preserved-project-acceptance'
+    }));
+    await writeFile(path.join(dir, 'acceptance_plan.json'), JSON.stringify({
+      task_id: task.id,
+      generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1',
+      functional_checks: ['preserved-project-check'],
+      regression_checks: [], negative_tests: [], manual_review: [], automation: [], rubric: []
+    }));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({
+      task_id: task.id,
+      generated_by: 'project_scope_worker_revision_after_deterministic_planner_v1',
+      approach: 'preserved-project-approach',
+      checkpoints: [{ id: 'cp1', goal: 'preserved milestone', output_file: 'checkpoints/cp1.json' }]
+    }));
+    const contract = await writeTaskContract(root, 'agent-tasks', task, {
+      projectAuthorization: { project: 'probe', source: 'test',
+        production_authorized: false, paid_action_authorized: false }
+    });
+    const acceptance = await writeAcceptancePlan(root, 'agent-tasks', task, contract);
+    const dev = await writeDevPlan(root, 'agent-tasks', task, contract, acceptance);
+    assert.equal(contract.contract.task_scope, 'project');
+    assert.deepEqual(contract.contract.deliverables, ['preserved-project-deliverable']);
+    assert.deepEqual(acceptance.plan.functional_checks, ['preserved-project-check']);
+    assert.deepEqual(dev.plan.checkpoints.map((entry) => entry.id), ['cp1']);
+    assert.equal(dev.plan.approach, 'preserved-project-approach');
+    assert.equal(dev.plan.checkpoint_schema.checkpoint_id, 'cp2');
+    const acceptedReviews = { reviews: [{ checkpointId: 'cp1', sequence: 1, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed' }).outcome, 'project_in_progress');
+    const noProgress = buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 1 });
+    assert.equal(noProgress.outcome, 'needs_revision');
+    assert.equal(noProgress.no_progress_continuation, true);
+    assert.match(noProgress.reasons[0], /no new committed and accepted milestone/);
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 0 }).outcome, 'project_in_progress');
+    const completedReviews = { reviews: [{ checkpointId: 'cp1', sequence: 1, status: 'accepted', projectCompletion: { status: 'accepted' } }] };
+    assert.notEqual(buildFinalJudgement(contract.contract, acceptance.plan, dev.plan, { count: 1 }, completedReviews, { dispatchStatus: 'completed', priorCheckpointCount: 1 }).outcome, 'needs_revision');
+    const committedMissing = { ...dev.plan, checkpoints: [...dev.plan.checkpoints, { id: 'cp2', goal: 'specific committed batch', output_file: 'checkpoints/cp2.json' }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, committedMissing, { count: 1 }, acceptedReviews, { dispatchStatus: 'completed' }).outcome, 'needs_revision');
+    const accepted170 = Array.from({ length: 170 }, (_, index) => ({ id: `cp${index + 1}`, goal: `bounded batch ${index + 1}` }));
+    const reviews170 = { reviews: accepted170.map((entry, index) => ({ checkpointId: entry.id, sequence: index + 1, status: 'accepted', projectCompletion: { status: 'in_progress' } })) };
+    const exact170 = { ...dev.plan, checkpoints: accepted170 };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 170 }, reviews170, { dispatchStatus: 'completed' }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 170 }, reviews170, { dispatchStatus: 'completed', priorCheckpointCount: 170 }).outcome, 'needs_revision');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, exact170, { count: 171 }, reviews170, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 170 }).outcome, 'needs_revision');
+    const progressed171 = { ...exact170, checkpoints: [...accepted170, { id: 'cp171', goal: 'selected batch' }] };
+    const accepted171 = { reviews: [...reviews170.reviews, { checkpointId: 'cp171', sequence: 171, status: 'accepted', projectCompletion: { status: 'in_progress' } }] };
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 170 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, progressed171, { count: 171 }, accepted171, { dispatchStatus: 'completed', priorCheckpointCount: 170, priorPlannedCheckpointCount: 171 }).outcome, 'project_in_progress');
+    assert.equal(buildFinalJudgement(contract.contract, acceptance.plan, { ...exact170, checkpoints: [...accepted170, { id: 'cp171', goal: 'unexecuted placeholder' }] }, { count: 170 }, reviews170, { dispatchStatus: 'completed' }).outcome, 'needs_revision');
+    await writeFile(path.join(dir, 'checkpoints/cp1.json'), JSON.stringify({
+      task_id: task.id, checkpoint_id: 'cp1', status: 'ready_for_acceptance', summary: 'Accepted local slice',
+      files_changed: [], verification: ['focused test passed'], blockers: [], risks: [],
+      project_completion: { status: 'in_progress' }
+    }));
+    await mkdir(path.join(root, 'runtime/loops/agent-tasks/failed'), { recursive: true });
+    await writeFile(path.join(root, 'runtime/loops/agent-tasks/failed', `${task.id}.json`), JSON.stringify({ ...task, status: 'needs_revision' }));
+    await writeFile(path.join(dir, 'final_judgement.json'), JSON.stringify(noProgress));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify(dev.plan));
+    const newer = new Date(Date.now() + 2000);
+    await utimes(path.join(dir, 'dev_plan.json'), newer, newer);
+    const refreshed = await refreshTaskAcceptance(root, { queue: 'agent-tasks', taskId: task.id });
+    assert.equal(refreshed.status, 'needs_revision');
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'final_judgement.json'), 'utf8')).no_progress_continuation, true);
+    await writeFile(path.join(dir, 'checkpoints/cp2.json'), JSON.stringify({
+      task_id: task.id, checkpoint_id: 'cp2', status: 'ready_for_acceptance', summary: 'Selected next batch',
+      files_changed: [], verification: ['next batch test passed'], blockers: [], risks: [],
+      project_completion: { status: 'in_progress' }
+    }));
+    await writeFile(path.join(dir, 'dev_plan.json'), JSON.stringify({
+      ...dev.plan, checkpoints: [...dev.plan.checkpoints, { id: 'cp2', goal: 'Selected next batch', output_file: 'checkpoints/cp2.json' }]
+    }));
+    const latest = new Date(Date.now() + 4000);
+    await utimes(path.join(dir, 'dev_plan.json'), latest, latest);
+    const resumed = await refreshTaskAcceptance(root, { queue: 'agent-tasks', taskId: task.id });
+    assert.equal(resumed.status, 'project_in_progress');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 {
   const devPlan = { checkpoints: [{ id: 'cp1' }] };
