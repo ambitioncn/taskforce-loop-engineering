@@ -42,8 +42,18 @@ same input digest. Failed file accesses are checked against the recorded working
 directory or directory descriptor, including nested paths and resumed calls.
 Swallowing a missing undeclared input error does not make verification pass.
 Missing, malformed, stale, or red receipts fail verification.
-The queue run records the evidence directory and digest in its verification
-artifact. `code-task-run` repeats isolated verification after applying a
+The queue run records the evidence directory, digest and, for a failed run, a
+short `reason` (supervisor error, read-audit violation, timeout or failed
+receipt check) in its verification artifact.
+
+The sandbox drops every capability (`--cap-drop ALL`). When the supervisor runs
+as root, it starts the traced sandbox as the unprivileged `nobody` identity, with
+the snapshot, output and trace staged in a private `/tmp/loop-isolated-*`
+directory and moved into the evidence directory afterwards, so the command can
+neither remount the read-only system binds nor read root-only host files such
+as `/etc/shadow`. The supervisor's `--timeout` covers freezing as well as the
+command, and a SIGTERM to the supervisor tears down the traced sandbox, which
+runs in its own session. `code-task-run` repeats isolated verification after applying a
 reviewed patch; its evidence lives beside the project root in
 `.loop-isolation-evidence/<task-id>/`.
 
@@ -74,8 +84,21 @@ The supervisor models its explicit mount roots and runtime-file ancestors;
 unresolved traversal through dynamic external mounts or symlink ancestors fails
 closed. This is bounded trace auditing, not unrestricted syscall emulation.
 
+Symlinks the command creates (in `/tmp` or `/out`, which start empty) are
+recorded from the trace, followed through renames, and resolved before a failed
+access is audited, so probing an undeclared input through such a link is still
+rejected. Process exits and child waits that never return during PID-namespace
+teardown are not treated as unfinished file syscalls.
+
 Failed `/proc/self/cwd`, `/proc/thread-self/cwd` and self `root` probes are
 resolved using the traced process cwd or the sandbox root before source-input
 auditing. Raw suffix components are retained. Unresolved process/fd aliases
-(including `/dev/fd`) fail closed; optional accesses via unknown dynamic aliases
+(including `/dev/fd` and another thread's `/proc/.../task/<tid>/` view) fail closed; optional accesses via unknown dynamic aliases
 may therefore be rejected. This does not claim general procfs emulation.
+
+## Running the self-tests
+
+`npm test` starts with the live sandbox tests and needs Linux with bubblewrap,
+strace and Python 3 (`apt-get install bubblewrap strace python3`). Without them
+the test names the missing tools and fails; set `LOOP_SKIP_ISOLATION_TESTS=1`
+to skip only those live tests on a machine that cannot run the sandbox.

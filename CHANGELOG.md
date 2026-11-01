@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Security:** isolated verification drops all capabilities in the sandbox and, when started as root, runs the traced command as `nobody`; previously a root host gave the sandbox full capabilities, so a verification command could remount `/usr` or `/etc` read-write, modify host binaries and still pass, and could read root-only files such as `/etc/shadow`.
+- The undeclared-input audit follows symlinks the command creates (including renamed and relative ones) and rejects another thread's `/proc/.../task/<tid>/` aliases, so `ln -s /work /tmp/w; cat /tmp/w/hidden.txt` no longer passes unnoticed.
+- Fix intermittent false failures of isolated verification when processes are killed in `exit_group` or `wait4` during PID-namespace teardown (`unfinished`/`overlapping file syscall`).
+- The isolation supervisor's timeout now covers input freezing, and SIGTERM tears down the traced sandbox, so a caller timeout no longer orphans strace, bwrap and the command.
+- A failed isolated verification reports its `reason`; the live isolation self-test names missing tools (`LOOP_SKIP_ISOLATION_TESTS=1` skips it) instead of failing on an unrelated `stderr.log` read.
+
 ## 0.16.4 - 2026-10-29
 
 - Measure project continuation by newly accepted, evidence-bound milestone identities, preserving explicit and inferred project plans; renamed plans and duplicate snapshots no longer count as progress.

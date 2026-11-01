@@ -131,3 +131,35 @@ with tempfile.TemporaryDirectory() as tmp:
         trace.write_text(f'1 access("{name}", R_OK) = -1 ENOENT (missing)\n')
         assert not module.trace_verdict(trace, {}, root, {})[0]
 print('self cwd/root aliases and unknown fd/process alias regressions passed')
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    (root / 'hidden.txt').write_text('hidden')
+    (root / 'sub').mkdir()
+    trace = root / 'trace'
+    # Symlinks the sandbox creates in /tmp or /out are followed by the audit,
+    # including after a rename and with relative targets.
+    for setup, probe, allowed in [
+        ('1 symlink("/work", "/tmp/w") = 0\n', '/tmp/w/hidden.txt', False),
+        ('1 symlinkat("../work", AT_FDCWD</tmp>, "rel") = 0\n', '/tmp/rel/hidden.txt', False),
+        ('1 symlink("/work", "/out/w") = 0\n1 rename("/out/w", "/tmp/moved") = 0\n', '/tmp/moved/hidden.txt', False),
+        ('1 symlink("/work", "/tmp/w") = 0\n', '/tmp/w/missing.txt', True),
+        ('1 symlink("/usr", "/tmp/u") = 0\n', '/tmp/u/hidden.txt', True),
+    ]:
+        trace.write_text('1 chdir("/work") = 0\n' + setup + f'1 access("{probe}", R_OK) = -1 ENOENT (missing)\n')
+        ok, errors = module.trace_verdict(trace, {}, root, {})
+        assert ok == allowed, (setup, probe, errors)
+    # Another thread's view cannot be proven to be this process's cwd/root.
+    for name in ['/proc/self/task/7/cwd/hidden.txt', '/proc/self/task/7/root/work/hidden.txt']:
+        trace.write_text(f'1 chdir("/work") = 0\n1 access("{name}", R_OK) = -1 ENOENT (missing)\n')
+        assert not module.trace_verdict(trace, {}, root, {})[0], name
+    # Calls that never return when the PID namespace is torn down are not
+    # unfinished file syscalls; an unfinished open still fails.
+    teardown = ('1 chdir("/work") = 0\n2 wait4(-1,  <unfinished ...>\n3 exit_group(0)                     = ?\n'
+                '2 <... wait4 resumed> <unfinished ...>) = ?\n2 +++ killed by SIGKILL +++\n'
+                '4 exit_group(0 <unfinished ...>\n4 +++ killed by SIGKILL +++\n')
+    trace.write_text(teardown)
+    assert module.trace_verdict(trace, {}, root, {}) == (True, []), module.trace_verdict(trace, {}, root, {})
+    trace.write_text('1 chdir("/work") = 0\n5 openat(AT_FDCWD</work>, "hidden.txt", O_RDONLY <unfinished ...>\n5 +++ killed by SIGKILL +++\n')
+    assert not module.trace_verdict(trace, {}, root, {})[0]
+print('created symlinks, task aliases and namespace teardown regressions passed')
