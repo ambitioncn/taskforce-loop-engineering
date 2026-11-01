@@ -37,8 +37,19 @@ const firstDevPlan = await writeDevPlan(root, queue, checkpointTask, checkpointC
 assert.equal(firstDevPlan.plan.checkpoints[0].id, 'cp1');
 await writeJson(path.join(taskRuntimeDirFor(root, queue, checkpointTask.id), 'checkpoints', 'cp1.json'), { checkpoint_id: 'cp1' });
 const secondDevPlan = await writeDevPlan(root, queue, checkpointTask, checkpointContract, checkpointAcceptance);
-assert.equal(secondDevPlan.plan.checkpoints[0].id, 'cp2');
 assert.equal(secondDevPlan.plan.checkpoint_schema.checkpoint_id, 'cp2');
+assert.equal(secondDevPlan.plan.checkpoints[0].output_file, 'checkpoints/cp2.json');
+// The milestone identity survives replanning (revision, recovery, requeue), so
+// the new checkpoint continues the same review chain...
+assert.equal(secondDevPlan.plan.checkpoints[0].id, 'cp1');
+assert.equal(secondDevPlan.plan.checkpoint_schema.milestone_id, 'cp1');
+assert.equal(secondDevPlan.plan.checkpoint_schema.revises_checkpoint_id, 'cp1');
+// ...and only moves on once the project continued after an accepted milestone.
+await writeJson(path.join(taskRuntimeDirFor(root, queue, checkpointTask.id), 'checkpoints', 'cp2.json'), { checkpoint_id: 'cp2' });
+const continuedDevPlan = await writeDevPlan(root, queue, { ...checkpointTask, projectContinuedAt: new Date().toISOString() }, checkpointContract, checkpointAcceptance);
+assert.equal(continuedDevPlan.plan.checkpoints[0].id, 'cp3');
+assert.equal(continuedDevPlan.plan.checkpoint_schema.milestone_id, 'cp3');
+assert.equal(continuedDevPlan.plan.checkpoint_schema.revises_checkpoint_id, null);
 
 assert.equal(normalizeGoalDecision({ verdict: 'revise' }).decision, 'change_strategy');
 assert.deepEqual(goalLoopTransition({ decision: 'change_strategy' }, { round: 1, maxRounds: 3 }), {

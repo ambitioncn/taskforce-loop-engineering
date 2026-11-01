@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep a task's milestone identity across revision rounds, runtime and orphan recovery and operator requeues; it only advances after an accepted milestone continues the project. The 0.16.1–0.16.4 template renamed the milestone on every dispatch, so a bounded task revised along the template could never be accepted and a resolved historical blocker vetoed it. Checkpoints that declare `revises_checkpoint_id` now join the chain they revise, which also repairs records written by those versions.
+- A project run recovered after a runtime interruption no longer fails as "no new accepted milestone" or "accepted checkpoints do not cover required": work written by the interrupted run counts as progress (recovery stays bounded by `retry.runtimeRecoveryMaxAttempts`).
 - **Security:** isolated verification drops all capabilities in the sandbox and, when started as root, runs the traced command as `nobody`; previously a root host gave the sandbox full capabilities, so a verification command could remount `/usr` or `/etc` read-write, modify host binaries and still pass, and could read root-only files such as `/etc/shadow`.
 - The undeclared-input audit follows symlinks the command creates (including renamed and relative ones) and rejects another thread's `/proc/.../task/<tid>/` aliases, so `ln -s /work /tmp/w; cat /tmp/w/hidden.txt` no longer passes unnoticed.
 - Fix intermittent false failures of isolated verification when processes are killed in `exit_group` or `wait4` during PID-namespace teardown (`unfinished`/`overlapping file syscall`).
