@@ -465,9 +465,13 @@ def main():
             trace.touch(mode=0o600)
             for path in [snapshot, output, trace, *snapshot.rglob("*")]:
                 os.chown(path, *unprivileged, follow_symlinks=False)
+        # bwrap is never started as root here, so it runs unprivileged and
+        # gives the sandboxed command no capabilities (the self-test checks
+        # CapEff). --cap-drop is not passed: bubblewrap 0.8 applies it before
+        # configuring the sandbox loopback, which then fails with EPERM.
         record["sandbox_identity"] = {"uid": unprivileged[0], "gid": unprivileged[1]} if unprivileged else {"uid": os.geteuid(), "gid": os.getegid()}
         sandbox = [tools["bwrap"]["path"], "--die-with-parent", "--unshare-user", "--unshare-net",
-                   "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL",
+                   "--unshare-pid", "--unshare-ipc", "--unshare-uts",
                    "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
                    "--ro-bind", str(snapshot), "/work", "--bind", str(output), "/out",
                    "--dir", "/home", "--setenv", "HOME", "/tmp", "--chdir", "/work"]

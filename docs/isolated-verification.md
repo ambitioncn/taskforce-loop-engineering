@@ -46,8 +46,9 @@ The queue run records the evidence directory, digest and, for a failed run, a
 short `reason` (supervisor error, read-audit violation, timeout or failed
 receipt check) in its verification artifact.
 
-The sandbox drops every capability (`--cap-drop ALL`). When the supervisor runs
-as root, it starts the traced sandbox as the unprivileged `nobody` identity, with
+The sandboxed command holds no capabilities: bwrap is always started
+unprivileged. When the supervisor runs as root, it starts the traced sandbox as
+the unprivileged `nobody` identity, with
 the snapshot, output and trace staged in a private `/tmp/loop-isolated-*`
 directory and moved into the evidence directory afterwards, so the command can
 neither remount the read-only system binds nor read root-only host files such
