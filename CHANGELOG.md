@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.16.5 - 2026-11-02
+
+Security and correctness release for 0.16.1–0.16.4. Publication does not upgrade installed CLIs or generated integrations; re-run `loop-engineering-openclaw-manage --action upgrade --confirm-upgrade` (Hermes: rerun the installer with `--confirm-install --force`).
+
+- Keep a task's milestone identity across revision rounds, runtime and orphan recovery and operator requeues; it only advances after an accepted milestone continues the project. The 0.16.1–0.16.4 template renamed the milestone on every dispatch, so a bounded task revised along the template could never be accepted and a resolved historical blocker vetoed it. Checkpoints that declare `revises_checkpoint_id` now join the chain they revise, which also repairs records written by those versions.
+- A project run recovered after a runtime interruption no longer fails as "no new accepted milestone" or "accepted checkpoints do not cover required": work written by the interrupted run counts as progress (recovery stays bounded by `retry.runtimeRecoveryMaxAttempts`).
+- Cap consecutive context handoffs (`retry.maxContextHandoffs`, default 10, reset when a milestone is accepted): a worker whose verification evidence differed every turn (e.g. a run-specific log path) could hand off forever, starting a new paid session each tick.
+- Blockers and uncertain external actions written only in a context handoff are now recorded in the final judgement (`handoff_blockers`, `handoff_pending_actions`, reasons and next actions) and listed in the terminal notification. A handoff is passed only to the session right after it, so a later session is no longer shown an out-of-date `nextAction`.
+- Scope inference ignores 不/别 inside ordinary words (特别, 不同, 区别 ...), does not treat "第一步之后" as a bounded cue, and splits clauses at " - " and "without X, complete Y"; real negations ("不要只处理", "不仅是有界里程碑") still mark a project.
+- A checkpoint whose `verification` is not an array no longer crashes acceptance through revision coverage (the task used to stick in `active/` and be re-dispatched); with several planned milestones a review counts only for the milestone it names, so one accepted revision cannot cover two milestones; an unreadable gate, task or checkpoint is skipped during gate reconciliation instead of failing every run of the queue.
+- **Security:** isolated verification started by root now passes `--cap-drop ALL` to bwrap and masks root-only secrets of the bound `/etc` (`shadow`, `gshadow`, `sudoers`, SSH host keys, `ssl/private`); previously a root host gave the sandbox full capabilities, so a verification command could remount `/usr` or `/etc` read-write, modify host binaries and still pass, and could read `/etc/shadow`. Run the supervisor as a non-root user for full identity separation.
+- The undeclared-input audit follows symlinks the command creates (including renamed and relative ones) and rejects another thread's `/proc/.../task/<tid>/` aliases, so `ln -s /work /tmp/w; cat /tmp/w/hidden.txt` no longer passes unnoticed.
+- Fix intermittent false failures of isolated verification when processes are killed in `exit_group` or `wait4` during PID-namespace teardown (`unfinished`/`overlapping file syscall`).
+- The isolation supervisor's timeout now covers input freezing, and SIGTERM tears down the traced sandbox, so a caller timeout no longer orphans strace, bwrap and the command.
+- A failed isolated verification reports its `reason`; the live isolation self-test names missing tools (`LOOP_SKIP_ISOLATION_TESTS=1` skips it) instead of failing on an unrelated `stderr.log` read.
+
 ## 0.16.4 - 2026-10-29
 
 - Measure project continuation by newly accepted, evidence-bound milestone identities, preserving explicit and inferred project plans; renamed plans and duplicate snapshots no longer count as progress.

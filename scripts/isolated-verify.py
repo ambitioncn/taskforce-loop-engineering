@@ -162,7 +162,7 @@ def resolve_failed_process_alias(raw_name, cwd):
     Keep the suffix raw so missing ancestors and trailing slash semantics are
     still checked by available_project_attempt, not erased by normpath.
     """
-    alias = r'/proc/(self|thread-self|[0-9]+)/(cwd|root|fd)(?=/|$)|/dev/fd(?=/|$)'
+    alias = r'/proc/(self|thread-self|[0-9]+)(/task/[0-9]+)?/(cwd|root|fd)(?=/|$)|/dev/fd(?=/|$)'
     value = '/' + raw_name.lstrip('/')
     for _ in range(8):
         match = re.match(alias, value)
@@ -170,9 +170,11 @@ def resolve_failed_process_alias(raw_name, cwd):
             if re.match(alias, '/' + posixpath.normpath(value).lstrip('/')):
                 raise ValueError('unresolved dynamic alias traversal')
             return value
-        if match[1] not in ('self', 'thread-self') or match[2] == 'fd':
+        # /proc/<pid>/task/<tid>/... names another thread's view; it cannot be
+        # proven to be this process's cwd/root, so it fails closed.
+        if match[1] not in ('self', 'thread-self') or match[2] or match[3] == 'fd':
             raise ValueError('unresolved dynamic fd or process alias')
-        base = cwd if match[2] == 'cwd' else '/'
+        base = cwd if match[3] == 'cwd' else '/'
         if base is None:
             raise ValueError('unknown cwd for process alias')
         value = base.rstrip('/') + value[match.end():]
@@ -181,20 +183,62 @@ def resolve_failed_process_alias(raw_name, cwd):
     raise ValueError('recursive process alias traversal')
 
 
+def resolve_recorded_symlinks(raw_name, symlinks):
+    """Rewrite a path through symlinks the sandbox created itself.
+
+    /tmp and /out start empty, so every symlink there was made by a traced
+    symlink/symlinkat call. Without this, `ln -s /work /tmp/w; cat
+    /tmp/w/hidden.txt` would probe an undeclared input unseen.
+    """
+    value = '/' + posixpath.normpath(raw_name).lstrip('/')
+    rewritten = False
+    for _ in range(16):
+        for link in sorted(symlinks, key=len, reverse=True):
+            if value == link or value.startswith(link + '/'):
+                value = '/' + posixpath.normpath(symlinks[link] + value[len(link):]).lstrip('/')
+                rewritten = True
+                break
+        else:
+            # Untouched paths keep their raw form, so missing-ancestor and
+            # trailing-slash semantics are still checked by the walk.
+            return value if rewritten else raw_name
+    raise ValueError('recursive symlink traversal')
+
+
+# Calls that may legitimately never complete when their process is killed
+# (its own exit, or waiting on children during PID-namespace teardown).
+NON_FILE_TERMINAL_CALLS = ('exit', 'exit_group', 'wait4', 'waitid')
+
+
 def trace_verdict(trace, declared, root, runtime_files):
     if not trace.exists() or trace.stat().st_size == 0:
         return False, ['missing read trace']
     violations, pending, events = [], {}, []
-    written, cwds = set(), {}
+    written, cwds, symlinks = set(), {}, {}
     # Keep syscall entry order: a child can execute before clone's resumed line.
     for line in trace.read_text(errors='surrogateescape').splitlines():
         pid = line.split(maxsplit=1)[0] if line.strip() else ''
+        # A process killed while a call that touches no file was returning is
+        # logged as "<... wait4 resumed> <unfinished ...>) = ?"; that closes
+        # the pending call rather than starting an overlapping one.
+        killed_resume = re.search(r'<\.\.\. (\w+) resumed> <unfinished \.\.\.>', line)
+        if killed_resume and killed_resume.group(1) in NON_FILE_TERMINAL_CALLS and pid in pending:
+            pending.pop(pid)
+            continue
         if '<unfinished ...>' in line:
             if pid in pending:
                 violations.append('overlapping file syscall')
             pending[pid] = (len(events), line.split('<unfinished ...>', 1)[0])
             events.append(None)
             continue
+        # A process killed while blocked in a call that never returns (its own
+        # exit, or waiting for a child when the PID namespace is torn down)
+        # leaves that call unfinished. Those calls touch no file; an unfinished
+        # file syscall still fails below.
+        if re.match(r'^\S+\s+\+\+\+ (exited|killed)', line) and pid in pending:
+            name = re.match(r'^\S+\s+(\w+)\(', pending[pid][1])
+            if name and name.group(1) in NON_FILE_TERMINAL_CALLS:
+                pending.pop(pid)
         resumed = re.search(r'<\.\.\. \w+ resumed>', line)
         if resumed:
             prior = pending.pop(pid, None)
@@ -218,6 +262,28 @@ def trace_verdict(trace, declared, root, runtime_files):
         if not cwds:
             cwds[pid] = [str(root)]
         state = cwds.setdefault(pid, [None])
+        if syscall in ('symlink', 'symlinkat', 'rename', 'renameat', 'renameat2') and result == 0:
+            # Record symlinks the sandbox creates (and moves) so failed probes
+            # through them are audited at their real target.
+            try:
+                strings = [decode_trace_string(item) for item in re.findall(r'"((?:[^"\\]|\\.)*)"', args)]
+                directories = [decode_trace_string(item) for item in re.findall(r'(?:AT_FDCWD|\d+)<([^<>]+)>', args)]
+                def absolute(path, base):
+                    return '/' + posixpath.normpath(path if path.startswith('/') else posixpath.join(base or state[0] or '/', path)).lstrip('/')
+                if syscall.startswith('symlink'):
+                    link = absolute(strings[-1], directories[-1] if directories else None)
+                    if link == '/newroot' or link.startswith('/newroot/'):
+                        continue  # bwrap building the sandbox, before /work exists
+                    target = strings[0] if strings[0].startswith('/') else posixpath.join(posixpath.dirname(link), strings[0])
+                    symlinks[link] = '/' + posixpath.normpath(target).lstrip('/')
+                else:
+                    old = absolute(strings[0], directories[0] if directories else None)
+                    new = absolute(strings[1], directories[-1] if directories else None)
+                    for link in [key for key in symlinks if key == old or key.startswith(old + '/')]:
+                        symlinks[new + link[len(old):]] = symlinks.pop(link)
+            except (ValueError, UnicodeError, IndexError):
+                violations.append('unresolved symlink bookkeeping')
+            continue
         if syscall in ('clone', 'clone3', 'fork', 'vfork') and result > 0:
             host_pid = re.search(r"=\s+\d+ /\* (\d+) in strace's PID NS \*/", line)
             child_pid = host_pid[1] if host_pid else str(result)
@@ -261,6 +327,8 @@ def trace_verdict(trace, declared, root, runtime_files):
             if raw_name:
                 try:
                     raw_name = resolve_failed_process_alias(raw_name, state[0])
+                    if symlinks:
+                        raw_name = resolve_recorded_symlinks(raw_name, symlinks)
                     name = '/' + posixpath.normpath(raw_name).lstrip('/')
                 except ValueError as exc:
                     violations.append(str(exc))
@@ -300,6 +368,21 @@ def trace_verdict(trace, declared, root, runtime_files):
     return not violations, violations[:30]
 
 
+# Root-only secrets in the read-only /etc bind. A root supervisor masks them,
+# because the sandbox identity owns root's files even without capabilities.
+SECRET_SYSTEM_PATHS = ("/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-", "/etc/sudoers",
+                       "/etc/sudoers.d", "/etc/ssl/private", "/etc/ssh/ssh_host_rsa_key", "/etc/ssh/ssh_host_ecdsa_key",
+                       "/etc/ssh/ssh_host_ed25519_key", "/etc/ssh/ssh_host_dsa_key")
+
+
+class SupervisorTerminated(Exception):
+    pass
+
+
+def _terminated(signum, frame):
+    raise SupervisorTerminated("supervisor terminated by signal %d" % signum)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
@@ -309,6 +392,12 @@ def main():
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
+    # The budget covers the whole run, freezing included, so the caller's own
+    # timeout (a little longer) never fires first. If it is killed anyway,
+    # SIGTERM still tears down the traced sandbox, which runs in its own
+    # session and would otherwise be orphaned.
+    deadline = time.monotonic() + args.timeout
+    signal.signal(signal.SIGTERM, _terminated)
     root = Path(args.root).resolve(strict=True)
     evidence = Path(args.evidence).resolve()
     if evidence.exists():
@@ -354,18 +443,36 @@ def main():
             os.chmod(dest, before[name]["mode"])
         if inventory(snapshot, names) != before or inventory(root, names) != before:
             raise ValueError("inputs changed during freeze")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("timeout expired while freezing inputs")
         record["snapshot_unchanged"] = True
         trace = evidence / "trace.log"
         output = evidence / "output"
         output.mkdir()
+        # bwrap started by root keeps every capability in its user namespace,
+        # so a command could remount the read-only system binds and write the
+        # host /usr or /etc. As root, drop them all (bwrap still configures the
+        # namespaces first). Running bwrap as an unprivileged identity instead
+        # is not portable: hosts that restrict unprivileged user namespaces
+        # (Ubuntu 23.10+) deny it the capabilities to set up loopback.
+        privileged = os.geteuid() == 0
+        record["sandbox_capabilities"] = "dropped" if privileged else "unprivileged"
         sandbox = [tools["bwrap"]["path"], "--die-with-parent", "--unshare-user", "--unshare-net",
-                   "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+                   "--unshare-pid", "--unshare-ipc", "--unshare-uts", *(["--cap-drop", "ALL"] if privileged else []),
                    "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
                    "--ro-bind", str(snapshot), "/work", "--bind", str(output), "/out",
                    "--dir", "/home", "--setenv", "HOME", "/tmp", "--chdir", "/work"]
         for system in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
             if Path(system).exists():
                 sandbox += ["--ro-bind", system, system]
+        if privileged:
+            # Root-owned host files still belong to the sandbox identity, so
+            # mask the usual root-only secrets of the bound /etc.
+            for secret in SECRET_SYSTEM_PATHS:
+                candidate = Path(secret)
+                if candidate.is_symlink() or not candidate.exists():
+                    continue
+                sandbox += ["--tmpfs", secret] if candidate.is_dir() else ["--ro-bind", "/dev/null", secret]
         if any(name.startswith("/opt/") for name in runtime_files):
             sandbox += ["--dir", "/opt"]
         for name in runtime_files:
@@ -379,12 +486,18 @@ def main():
             child = subprocess.Popen(invocation, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                      start_new_session=True, cwd=root, env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"})
             try:
-                record["exit_code"] = child.wait(timeout=args.timeout)
-            except subprocess.TimeoutExpired:
+                record["exit_code"] = child.wait(timeout=max(0.1, deadline - time.monotonic()))
+            except (subprocess.TimeoutExpired, SupervisorTerminated) as exc:
                 record["timed_out"] = True
-                os.killpg(child.pid, signal.SIGTERM)
+                if isinstance(exc, SupervisorTerminated):
+                    record["error"] = str(exc)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 try:
-                    child.wait(timeout=5)
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=0.5 if isinstance(exc, SupervisorTerminated) else 5)
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
                     child.wait()

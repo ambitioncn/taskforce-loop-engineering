@@ -7,6 +7,16 @@ import { execFileSync } from 'node:child_process';
 import { enqueueTask, runCommand, runQueueOnce } from '../lib/core.mjs';
 import { runIsolatedVerification, validateIsolatedVerification } from '../lib/isolated-verification.mjs';
 
+// These tests drive the real sandbox. Say what is missing instead of failing
+// later on an unrelated file read.
+const missingTools = process.platform !== 'linux' ? ['Linux'] : ['bwrap', 'strace', 'python3'].filter((tool) => {
+  try { execFileSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }); return false; } catch { return true; }
+});
+if (missingTools.length) {
+  console.error(`isolated verification self-test needs ${missingTools.join(', ')} (Debian/Ubuntu: apt-get install bubblewrap strace python3). Set LOOP_SKIP_ISOLATION_TESTS=1 to skip it on machines that cannot run the sandbox.`);
+  process.exit(process.env.LOOP_SKIP_ISOLATION_TESTS === '1' ? 0 : 1);
+}
+
 const base = await mkdtemp(path.join(tmpdir(), 'loop-isolation-self-test-'));
 const quote = (value) => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
 const run = async (project, command, inputs, label, runtimeFiles = []) => {
@@ -28,7 +38,7 @@ await writeFile(path.join(pythonProject, 'input.txt'), 'hello\n');
 await writeFile(path.join(pythonProject, 'hidden.txt'), 'private\n');
 const python = await run(pythonProject, 'cat input.txt > /out/result.txt', ['input.txt'], 'python-pass');
 assert.equal(python.result.exitCode, 0, JSON.stringify(python.terminal) + '\n' +
-  (await readFile(path.join(base, 'python-pass', 'stderr.log'), 'utf8')).slice(0, 500));
+  (await readFile(path.join(base, 'python-pass', 'stderr.log'), 'utf8').catch(() => '')).slice(0, 500));
 assert.equal(python.terminal.status, 'passed');
 assert.equal((await readFile(path.join(base, 'python-pass', 'output', 'result.txt'), 'utf8')).trim(), 'hello');
 
@@ -188,6 +198,11 @@ for (const [label, command, expected] of [
   ['double-slash', 'cat //work/hidden.txt 2>/dev/null || true', 'failed_or_unknown'],
   ['missing-alias', 'cat //work/../work/missing.txt 2>/dev/null || true', 'passed'],
   ['file-alias', 'cat ../work/input.txt/../hidden.txt 2>/dev/null || true', 'passed'],
+  ['symlink-tmp', 'ln -s /work /tmp/w; cat /tmp/w/hidden.txt 2>/dev/null || true', 'failed_or_unknown'],
+  ['symlink-out', 'ln -s /work /out/w; cat /out/w/hidden.txt 2>/dev/null || true', 'failed_or_unknown'],
+  ['symlink-renamed', 'ln -s /work /tmp/a; mv /tmp/a /tmp/b; cat /tmp/b/hidden.txt 2>/dev/null || true', 'failed_or_unknown'],
+  ['symlink-missing', 'ln -s /work /tmp/w; cat /tmp/w/missing.txt 2>/dev/null || true', 'passed'],
+  ['task-alias', 'cat /proc/self/task/$$/cwd/hidden.txt 2>/dev/null || true', 'failed_or_unknown'],
 ]) {
   await enqueueTask(queueProject, { queue: 'path-' + label, title: label, task: 'Verify path semantics' });
   const outcome = await runQueueOnce(queueProject, { queue: 'path-' + label, dispatcher: 'true',
@@ -198,4 +213,18 @@ for (const [label, command, expected] of [
   if (expected !== 'passed') assert.equal(outcome.status, 'verify_failed');
 }
 
-console.log('isolated verification: two projects passed; undeclared input and forged trace rejected');
+// The sandbox holds no capabilities even when the host runs as root: it can
+// neither remount the read-only system binds nor read root-only host files.
+const privileges = await run(pythonProject, "grep CapEff /proc/self/status > /out/caps.txt; " +
+  "mount -o remount,rw,bind /usr 2>/dev/null && touch /usr/.loop-isolation-probe 2>/dev/null; " +
+  "cat /etc/shadow > /out/shadow.txt 2>/dev/null; true", ['input.txt'], 'privileges');
+assert.equal(privileges.terminal.status, 'passed', JSON.stringify(privileges.terminal));
+assert.match(await readFile(path.join(base, 'privileges', 'output', 'caps.txt'), 'utf8'), /CapEff:\s+0+\s*$/);
+assert.equal(await readFile('/usr/.loop-isolation-probe').then(() => true, () => false), false, 'the sandbox wrote the host /usr');
+assert.equal((await readFile(path.join(base, 'privileges', 'output', 'shadow.txt'), 'utf8').catch(() => '')).length, 0, 'the sandbox read /etc/shadow');
+
+// A failed isolation says why.
+const reasoned = await run(pythonProject, 'cat hidden.txt >/dev/null 2>&1 || true', ['input.txt'], 'reason');
+assert.match(reasoned.result.isolation.reason, /read audit failed: undeclared available project input/);
+
+console.log('isolated verification: two projects passed; undeclared input, aliases, forged trace and privileges rejected');
