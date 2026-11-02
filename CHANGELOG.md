@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.16.5 - 2026-11-02
+
+Security and correctness release for 0.16.1–0.16.4. Publication does not upgrade installed CLIs or generated integrations; re-run `loop-engineering-openclaw-manage --action upgrade --confirm-upgrade` (Hermes: rerun the installer with `--confirm-install --force`).
+
 - Keep a task's milestone identity across revision rounds, runtime and orphan recovery and operator requeues; it only advances after an accepted milestone continues the project. The 0.16.1–0.16.4 template renamed the milestone on every dispatch, so a bounded task revised along the template could never be accepted and a resolved historical blocker vetoed it. Checkpoints that declare `revises_checkpoint_id` now join the chain they revise, which also repairs records written by those versions.
 - A project run recovered after a runtime interruption no longer fails as "no new accepted milestone" or "accepted checkpoints do not cover required": work written by the interrupted run counts as progress (recovery stays bounded by `retry.runtimeRecoveryMaxAttempts`).
 - Cap consecutive context handoffs (`retry.maxContextHandoffs`, default 10, reset when a milestone is accepted): a worker whose verification evidence differed every turn (e.g. a run-specific log path) could hand off forever, starting a new paid session each tick.
