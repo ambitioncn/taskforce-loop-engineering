@@ -46,13 +46,16 @@ The queue run records the evidence directory, digest and, for a failed run, a
 short `reason` (supervisor error, read-audit violation, timeout or failed
 receipt check) in its verification artifact.
 
-The sandboxed command holds no capabilities: bwrap is always started
-unprivileged. When the supervisor runs as root, it starts the traced sandbox as
-the unprivileged `nobody` identity, with
-the snapshot, output and trace staged in a private `/tmp/loop-isolated-*`
-directory and moved into the evidence directory afterwards, so the command can
-neither remount the read-only system binds nor read root-only host files such
-as `/etc/shadow`. The supervisor's `--timeout` covers freezing as well as the
+The sandboxed command holds no capabilities. When the supervisor runs as root,
+bwrap is started with `--cap-drop ALL`, so the command can neither remount the
+read-only system binds nor write the host `/usr` or `/etc`; the usual root-only
+secrets of the bound `/etc` (`shadow`, `gshadow`, `sudoers`, SSH host keys,
+`ssl/private`) are masked. The sandbox identity still maps to host root, so
+other root-only files in the bound system directories remain readable: run the
+supervisor as a non-root user when that matters. (Running the sandbox as an
+unprivileged identity under root is not portable: hosts that restrict
+unprivileged user namespaces, such as Ubuntu 23.10+, deny it the capabilities
+bwrap needs to set up the sandbox network.) The supervisor's `--timeout` covers freezing as well as the
 command, and a SIGTERM to the supervisor tears down the traced sandbox, which
 runs in its own session. `code-task-run` repeats isolated verification after applying a
 reviewed patch; its evidence lives beside the project root in

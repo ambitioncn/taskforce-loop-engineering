@@ -8,7 +8,6 @@ import argparse
 import hashlib
 import json
 import os
-import pwd
 import posixpath
 import stat
 from pathlib import Path
@@ -16,7 +15,6 @@ import re
 import shutil
 import signal
 import subprocess
-import tempfile
 import time
 
 
@@ -370,6 +368,13 @@ def trace_verdict(trace, declared, root, runtime_files):
     return not violations, violations[:30]
 
 
+# Root-only secrets in the read-only /etc bind. A root supervisor masks them,
+# because the sandbox identity owns root's files even without capabilities.
+SECRET_SYSTEM_PATHS = ("/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-", "/etc/sudoers",
+                       "/etc/sudoers.d", "/etc/ssl/private", "/etc/ssh/ssh_host_rsa_key", "/etc/ssh/ssh_host_ecdsa_key",
+                       "/etc/ssh/ssh_host_ed25519_key", "/etc/ssh/ssh_host_dsa_key")
+
+
 class SupervisorTerminated(Exception):
     pass
 
@@ -401,8 +406,6 @@ def main():
     record = {"version": 1, "status": "failed_or_unknown", "command": args.command,
               "exit_code": None, "read_trace_verified": False, "snapshot_unchanged": False,
               "source_unchanged": False, "process_group_gone": False}
-    staging = None
-    unprivileged = None
     try:
         if not root.is_dir() or evidence == root or root in evidence.parents:
             raise ValueError("evidence must be outside project root")
@@ -431,22 +434,7 @@ def main():
                 raise FileNotFoundError(name + " required")
             tools[name] = {"path": str(Path(binary).resolve(strict=True)), "sha256": sha(Path(binary).resolve(strict=True))}
         record["host_tools"] = tools
-        # A sandbox started by root keeps every capability in its user
-        # namespace (it could remount the read-only system binds and write the
-        # host /usr or /etc), and root-owned host files look like its own. Root
-        # therefore runs the sandbox as an unprivileged identity, with the
-        # snapshot, output and trace in a private staging directory that
-        # identity can reach; they move into the evidence directory afterwards.
-        if os.geteuid() == 0:
-            try:
-                nobody = pwd.getpwnam("nobody")
-                unprivileged = (nobody.pw_uid, nobody.pw_gid)
-            except KeyError:
-                unprivileged = (65534, 65534)
-            staging = Path(tempfile.mkdtemp(prefix="loop-isolated-"))
-            os.chmod(staging, 0o711)
-        workspace = staging or evidence
-        snapshot = workspace / "snapshot"
+        snapshot = evidence / "snapshot"
         snapshot.mkdir()
         for name in before:
             dest = snapshot / name
@@ -458,26 +446,33 @@ def main():
         if time.monotonic() >= deadline:
             raise TimeoutError("timeout expired while freezing inputs")
         record["snapshot_unchanged"] = True
-        trace = workspace / "trace.log"
-        output = workspace / "output"
+        trace = evidence / "trace.log"
+        output = evidence / "output"
         output.mkdir()
-        if unprivileged:
-            trace.touch(mode=0o600)
-            for path in [snapshot, output, trace, *snapshot.rglob("*")]:
-                os.chown(path, *unprivileged, follow_symlinks=False)
-        # bwrap is never started as root here, so it runs unprivileged and
-        # gives the sandboxed command no capabilities (the self-test checks
-        # CapEff). --cap-drop is not passed: bubblewrap 0.8 applies it before
-        # configuring the sandbox loopback, which then fails with EPERM.
-        record["sandbox_identity"] = {"uid": unprivileged[0], "gid": unprivileged[1]} if unprivileged else {"uid": os.geteuid(), "gid": os.getegid()}
+        # bwrap started by root keeps every capability in its user namespace,
+        # so a command could remount the read-only system binds and write the
+        # host /usr or /etc. As root, drop them all (bwrap still configures the
+        # namespaces first). Running bwrap as an unprivileged identity instead
+        # is not portable: hosts that restrict unprivileged user namespaces
+        # (Ubuntu 23.10+) deny it the capabilities to set up loopback.
+        privileged = os.geteuid() == 0
+        record["sandbox_capabilities"] = "dropped" if privileged else "unprivileged"
         sandbox = [tools["bwrap"]["path"], "--die-with-parent", "--unshare-user", "--unshare-net",
-                   "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+                   "--unshare-pid", "--unshare-ipc", "--unshare-uts", *(["--cap-drop", "ALL"] if privileged else []),
                    "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
                    "--ro-bind", str(snapshot), "/work", "--bind", str(output), "/out",
                    "--dir", "/home", "--setenv", "HOME", "/tmp", "--chdir", "/work"]
         for system in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
             if Path(system).exists():
                 sandbox += ["--ro-bind", system, system]
+        if privileged:
+            # Root-owned host files still belong to the sandbox identity, so
+            # mask the usual root-only secrets of the bound /etc.
+            for secret in SECRET_SYSTEM_PATHS:
+                candidate = Path(secret)
+                if candidate.is_symlink() or not candidate.exists():
+                    continue
+                sandbox += ["--tmpfs", secret] if candidate.is_dir() else ["--ro-bind", "/dev/null", secret]
         if any(name.startswith("/opt/") for name in runtime_files):
             sandbox += ["--dir", "/opt"]
         for name in runtime_files:
@@ -488,10 +483,8 @@ def main():
         sandbox += ["--", "/bin/sh", "-c", args.command]
         invocation = [tools["strace"]["path"], "-f", "-yy", "--decode-pids=pidns", "-e", "trace=%file,%process,fchdir", "-s", "65535", "-o", str(trace), *sandbox]
         with (evidence / "stdout.log").open("wb") as stdout, (evidence / "stderr.log").open("wb") as stderr:
-            identity = {"user": unprivileged[0], "group": unprivileged[1], "extra_groups": []} if unprivileged else {}
             child = subprocess.Popen(invocation, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                     start_new_session=True, cwd=str(workspace) if unprivileged else root,
-                                     env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"}, **identity)
+                                     start_new_session=True, cwd=root, env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"})
             try:
                 record["exit_code"] = child.wait(timeout=max(0.1, deadline - time.monotonic()))
             except (subprocess.TimeoutExpired, SupervisorTerminated) as exc:
@@ -529,21 +522,6 @@ def main():
                   and record["process_group_gone"]) else "failed_or_unknown"
     except Exception as exc:
         record["error"] = str(exc)
-    finally:
-        if staging:
-            # Bring the staged artifacts into the evidence directory and give
-            # them back to root, so later processes of the sandbox identity
-            # cannot alter what was judged.
-            try:
-                for name in ("snapshot", "output", "trace.log"):
-                    if (staging / name).exists():
-                        shutil.move(str(staging / name), str(evidence / name))
-                        for path in [evidence / name, *(evidence / name).rglob("*")] if (evidence / name).is_dir() else [evidence / name]:
-                            os.chown(path, 0, 0, follow_symlinks=False)
-                shutil.rmtree(staging, ignore_errors=True)
-            except Exception as exc:
-                record["status"] = "failed_or_unknown"
-                record["error"] = record.get("error") or "evidence staging cleanup failed: " + str(exc)
     (evidence / "terminal.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"status": record["status"], "evidence": str(evidence), "input_digest": record.get("input_digest")}))
     return 0 if record["status"] == "passed" else 1
